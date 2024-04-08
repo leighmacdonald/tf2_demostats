@@ -1,0 +1,14 @@
+[package]
+name = "tf2_demostats"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4.4"
+actix-multipart = "0.6"
+env_logger = "0.11.3"
+log = "0.4.21"
+tf-demo-parser = "0.5.1"
+bitbuffer = "0.11.0"
+main_error = "0.1.2"
+fnv = "1.0.7"
