@@ -1,7 +1,19 @@
 [package]
 name = "tf2_demostats"
+description = "Summarize detailed match stats"
 version = "0.1.0"
+authors = ["Leigh MacDonald <leigh.macdonald@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/leighmacdonald/tf2_demostats"
 edition = "2021"
+
+[lib]
+name = "tf2_demostats"
+path = "src/lib.rs"
+
+[[bin]]
+name = "demostats"
+path = "src/bin/main.rs"
 
 [dependencies]
 actix-web = "4.4"
@@ -12,3 +24,4 @@ tf-demo-parser = "0.5.1"
 bitbuffer = "0.11.0"
 main_error = "0.1.2"
 fnv = "1.0.7"
+serde = { version = "1.0.197", features = ["derive"] }
