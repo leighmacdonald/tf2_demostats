@@ -7,7 +7,7 @@ use tf2_demostats::web::handler;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let host = "127.0.0.1";
+    let host = "[::1]";
     let port = 6969;
     fs::create_dir_all("./tmp")?;
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("debug"));

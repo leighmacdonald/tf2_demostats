@@ -1,1 +1,1 @@
-curl -v -i --form "file=@20240406-220701-plr_hightower.dem" http://localhost:6969/
+curl -v -i --form "file=@test.dem" http://localhost:6969/

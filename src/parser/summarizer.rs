@@ -501,6 +501,26 @@ impl MatchSummarizer {
                 "CTFBall_Ornament" => {}
                 "CTFCompoundBow" => {}
                 "CTFChargedSMG" => {}
+                "CSun" => {}
+                "CFunc_LOD" => {}
+                "CTFPistol_ScoutPrimary" => {}
+                "CCaptureFlag" => {}
+                "CCaptureFlagReturnIcon" => {}
+                "CBoneFollower" => {}
+                "CWaterLODControl" => {}
+                "CFuncOccluder" => {}
+                "CCaptureZone" => {}
+                "CTFProjectile_EnergyRing" => {}
+                "CTFRaygun" => {}
+                "CTFLunchBox_Drink" => {}
+                "CTFBat_Fish" => {}
+                "CFuncRotating" => {}
+                "CPhysicsPropMultiplayer" => {}
+                "CTFPlayerDestructionLogic" => {}
+                "CSpotlightEnd" => {}
+                "CTFRocketLauncher_AirStrike" => {}
+                "CTFParachute_Secondary" => {}
+                "CTFBreakableSign" => {}
 
                 _other => {
                     println!("\"{}\" => {}", class.name.as_str(), "{}");
