@@ -59,7 +59,7 @@ impl MessageHandler for MatchAnalyzer {
         matches!(message_type, MessageType::PacketEntities)
     }
 
-    fn handle_message(&mut self, message: &Message, _tick: DemoTick, parser_state: &ParserState) {
+    fn handle_message(&mut self, message: &Message, _tick: DemoTick, _parser_state: &ParserState) {
         match message {
             // Message::PacketEntities(message) => {
             //     for entity in message.entities.iter() {
