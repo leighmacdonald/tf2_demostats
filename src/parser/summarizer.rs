@@ -5,15 +5,19 @@ use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropName}
 use tf_demo_parser::{MessageType, ParserState, ReadResult, Stream};
 use tf_demo_parser::demo::data::{DemoTick, UserInfo};
 use tf_demo_parser::demo::message::Message;
+use tf_demo_parser::demo::packet::stringtable::StringTableEntry;
 use tf_demo_parser::demo::parser::MessageHandler;
 use serde::{Deserialize, Serialize};
+use tf_demo_parser::demo::gameevent_gen::ObjectDestroyedEvent;
+use tf_demo_parser::demo::gamevent::GameEvent;
+use tf_demo_parser::demo::message::gameevent::GameEventMessage;
 use tf_demo_parser::demo::message::packetentities::{EntityId, PacketEntity};
 use tf_demo_parser::demo::parser::gamestateanalyser::UserId;
 use tf_demo_parser::demo::parser::player_summary_analyzer::PlayerSummaryState;
 use crate::parser::weapon::{Weapon, WeaponDetail};
 
 #[derive(Default, Debug, Serialize, Deserialize)]
-pub struct MatchSummarizer {
+pub struct MatchAnalyzer {
     props: FnvHashSet<SendPropIdentifier>,
     prop_names: FnvHashMap<SendPropIdentifier, (SendTableName, SendPropName)>,
     state: PlayerSummaryState,
@@ -42,24 +46,74 @@ pub struct PlayerSummary {
     pub weapon_map: HashMap<Weapon, WeaponDetail>,
 }
 
-impl MatchSummarizer {
+impl MatchAnalyzer {
     pub fn new() -> Self {
         Self::default()
     }
 }
 
-impl MessageHandler for MatchSummarizer {
-    type Output = Vec<String>;
+impl MessageHandler for MatchAnalyzer {
+    type Output = PlayerSummaryState;
 
     fn does_handle(message_type: MessageType) -> bool {
         matches!(message_type, MessageType::PacketEntities)
     }
 
     fn handle_message(&mut self, message: &Message, _tick: DemoTick, parser_state: &ParserState) {
-        if let Message::PacketEntities(message) = message {
-            for entity in message.entities.iter() {
-                self.handle_packet_entity(entity, parser_state);
+        match message {
+            // Message::PacketEntities(message) => {
+            //     for entity in message.entities.iter() {
+            //         self.handle_packet_entity(entity, parser_state);
+            //     }
+            // }
+
+            Message::GameEvent(GameEventMessage { event, .. }) => match event {
+                GameEvent::PlayerShoot(_) => {
+                    println!("PlayerShoot");
+                }
+                GameEvent::PlayerDeath(death) => {
+                    println!("PlayerDeath {:?}", death.user_id);
+                    //self.state.kills.push(Kill::new(self.tick, death.as_ref()))
+                }
+                GameEvent::RoundStart(_) => {
+                    println!("shoot");
+                    // self.state.buildings.clear();
+                }
+                GameEvent::TeamPlayRoundStart(_) => {
+                    println!("TeamPlayRoundStart");
+                    //self.state.buildings.clear();
+                }
+                GameEvent::ObjectDestroyed(ObjectDestroyedEvent { index: _, .. }) => {
+                    println!("ObjectDestroyed");
+                    //self.state.remove_building((*index as u32).into());
+                }
+                _ => {
+                    let event_string = format!("{:?}", event);
+                    if event_string.contains("Shoot") {
+                        println!("player shoot event");
+                    }
+                }
+            },
+            _ => {
+                //println!("unhandled message: {message:?}");
             }
+        }
+
+    }
+
+    fn handle_string_entry(
+        &mut self,
+        table: &str,
+        index: usize,
+        entry: &StringTableEntry,
+        _parser_state: &ParserState,
+    ) {
+        if table == "userinfo" {
+            let _ = self.parse_user_info(
+                index,
+                entry.text.as_ref().map(|s| s.as_ref()),
+                entry.extra_data.as_ref().map(|data| data.data.clone()),
+            );
         }
     }
 
@@ -78,20 +132,23 @@ impl MessageHandler for MatchSummarizer {
             }
         }
     }
-
-    fn into_output(self, _state: &ParserState) -> Self::Output {
-        let names = self.prop_names;
-        let mut props = self
-            .props
-            .into_iter()
-            .map(|prop| {
-                let (table, name) = names.get(&prop).unwrap();
-                format!("{}.{}", table, name)
-            })
-            .collect::<Vec<_>>();
-        props.sort();
-        props
+    fn into_output(self, _parser_state: &ParserState) -> <Self as MessageHandler>::Output {
+        self.state
     }
+
+    // fn into_output(self, _state: &ParserState) -> Self::Output {
+    //     let names = self.prop_names;
+    //     let mut props = self
+    //         .props
+    //         .into_iter()
+    //         .map(|prop| {
+    //             let (table, name) = names.get(&prop).unwrap();
+    //             format!("{}.{}", table, name)
+    //         })
+    //         .collect::<Vec<_>>();
+    //     props.sort();
+    //     props
+    // }
 }
 
 /**
@@ -120,7 +177,7 @@ fn parse_integer_prop<F>(
 }
 
 
-impl MatchSummarizer {
+impl MatchAnalyzer {
     fn handle_packet_entity(&mut self, packet: &PacketEntity, parser_state: &ParserState) {
         use tf_demo_parser::demo::sendprop::SendPropValue;
 

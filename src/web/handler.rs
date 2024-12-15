@@ -2,7 +2,10 @@ use std::fs;
 use actix_multipart::form::MultipartForm;
 use actix_multipart::form::tempfile::TempFile;
 use actix_web::{get, HttpResponse, Responder, web};
-use tf_demo_parser::{Demo, DemoParser};
+use serde::{Deserialize, Serialize};
+use tf_demo_parser::{Demo, DemoParser, MatchState};
+use tf_demo_parser::demo::header::Header;
+use tf_demo_parser::demo::parser::player_summary_analyzer::PlayerSummaryState;
 use crate::parser;
 
 #[get("/test/{name}")]
@@ -16,6 +19,11 @@ pub struct UploadForm {
     files: Vec<TempFile>,
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+struct DemoDetail {
+    state: PlayerSummaryState,
+    header: Header,
+}
 
 pub async fn save_files(
     MultipartForm(form): MultipartForm<UploadForm>,
@@ -27,17 +35,22 @@ pub async fn save_files(
             Err(e) => return HttpResponse::InternalServerError().body(e.to_string()),
         };
         let demo = Demo::new(&file);
-        let handler = parser::summarizer::MatchSummarizer::new();
+        let handler = parser::summarizer::MatchAnalyzer::new();
         let stream = demo.get_stream();
         let parser = DemoParser::new_with_analyser(stream, handler);
 
-        let (header, _state) = match parser.parse() {
+        let (header, state) = match parser.parse() {
             Ok((h, s)) => (h, s),
             Err(e) => return HttpResponse::BadRequest().body(e.to_string()),
         };
-        println!("{:?}", header);
 
-        return HttpResponse::Ok().finish()
+        // println!("{:?}", header);
+        // println!("{:?}", state);
+        
+        let detail = DemoDetail{header, state};
+        
+        return HttpResponse::Ok().json(&detail)
+        //return HttpResponse::Ok().finish()
     };
 
     HttpResponse::Ok().finish()

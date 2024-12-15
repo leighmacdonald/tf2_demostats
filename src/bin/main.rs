@@ -14,6 +14,7 @@ async fn main() -> std::io::Result<()> {
     log::info!("Starting HTTP Service on {}:{}", &host, &port);
     HttpServer::new(|| {
         App::new()
+            .wrap(middleware::Compress::default())
             .wrap(middleware::Logger::default())
             .app_data(TempFileConfig::default().directory("./tmp"))
             .service(
@@ -23,8 +24,7 @@ async fn main() -> std::io::Result<()> {
             )
     }).
         bind((host, port))?.
-
-        workers(2).
+        //workers(2).
         run().
         await
 }
