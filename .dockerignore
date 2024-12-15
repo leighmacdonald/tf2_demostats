@@ -1,0 +1,5 @@
+*.exe
+/target
+/tmp
+.idea
+*.den
