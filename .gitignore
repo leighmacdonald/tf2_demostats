@@ -17,3 +17,4 @@ Cargo.lock
 /.idea
 
 *.dem
+/dist/
