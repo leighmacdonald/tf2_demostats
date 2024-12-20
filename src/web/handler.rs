@@ -1,17 +1,12 @@
-use std::fs;
-use actix_multipart::form::MultipartForm;
+use crate::parser;
 use actix_multipart::form::tempfile::TempFile;
-use actix_web::{get, HttpResponse, Responder, web};
+use actix_multipart::form::MultipartForm;
+use actix_web::{HttpResponse, Responder};
 use serde::{Deserialize, Serialize};
-use tf_demo_parser::{Demo, DemoParser, MatchState};
+use std::io::Read;
 use tf_demo_parser::demo::header::Header;
 use tf_demo_parser::demo::parser::player_summary_analyzer::PlayerSummaryState;
-use crate::parser;
-
-#[get("/test/{name}")]
-async fn greet(name: web::Path<String>) -> impl Responder {
-    format!("Hello {name}!")
-}
+use tf_demo_parser::{Demo, DemoParser};
 
 #[derive(Debug, MultipartForm)]
 pub struct UploadForm {
@@ -25,35 +20,44 @@ struct DemoDetail {
     header: Header,
 }
 
-pub async fn save_files(
-    MultipartForm(form): MultipartForm<UploadForm>,
-) -> impl Responder {
-    for f in form.files {
+pub async fn save_files(MultipartForm(form): MultipartForm<UploadForm>) -> impl Responder {
+    for mut f in form.files {
         let path = f.file_name.unwrap();
-        let file = match fs::read(path) {
+        println!("Reading file: {:?}", path);
+
+        let mut buffer = Vec::new();
+
+        match f.file.read_to_end(&mut buffer) {
             Ok(f) => f,
-            Err(e) => return HttpResponse::InternalServerError().body(e.to_string()),
+            Err(e) => {
+                log::error!("Failed to read upload {:?}", e);
+                return HttpResponse::InternalServerError().body(e.to_string());
+            }
         };
-        let demo = Demo::new(&file);
+        let demo = Demo::new(&buffer);
         let handler = parser::summarizer::MatchAnalyzer::new();
         let stream = demo.get_stream();
         let parser = DemoParser::new_with_analyser(stream, handler);
 
         let (header, state) = match parser.parse() {
             Ok((h, s)) => (h, s),
-            Err(e) => return HttpResponse::BadRequest().body(e.to_string()),
+            Err(e) => {
+                log::error!("Failed to parse upload {:?}", e);
+                return HttpResponse::BadRequest().body(e.to_string());
+            }
         };
 
         // println!("{:?}", header);
         // println!("{:?}", state);
-        
-        let detail = DemoDetail{header, state};
-        
-        return HttpResponse::Ok().json(&detail)
-        //return HttpResponse::Ok().finish()
-    };
 
-    HttpResponse::Ok().finish()
+        let detail = DemoDetail { header, state };
+
+        return HttpResponse::Ok().json(detail);
+    }
+
+    println!("Invalid request");
+
+    HttpResponse::BadRequest().finish()
 }
 
 pub async fn index() -> HttpResponse {

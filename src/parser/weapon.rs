@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(
 Debug,
 PartialEq,
