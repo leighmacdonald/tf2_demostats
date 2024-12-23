@@ -24,10 +24,6 @@ async fn main() -> std::io::Result<()> {
     log::info!("Starting HTTP Service on {}:{}", &host, &port);
 
     HttpServer::new(|| {
-        let json_cfg = web::JsonConfig::default()
-            // limit request payload size
-            .limit(250_000);
-
         App::new()
             .wrap(middleware::Compress::default())
             .wrap(middleware::Logger::default())
@@ -38,7 +34,9 @@ async fn main() -> std::io::Result<()> {
                     .memory_limit(100 * 1024 * 1024) // 100 MB
                     .error_handler(handle_multipart_error),
             )
-            .app_data(json_cfg)// 250mb
+            .app_data(web::JsonConfig::default()
+                // limit request payload size
+                .limit(250_000))
             .service(
                 web::resource("/")
                     .route(web::get().to(handler::index))
@@ -46,7 +44,7 @@ async fn main() -> std::io::Result<()> {
             )
     }).
         bind((host, port))?.
-        //workers(4).
+        //workers(4). // TODO Add env var
         run().
         await
 }

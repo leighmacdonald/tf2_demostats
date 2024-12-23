@@ -434,6 +434,7 @@ impl MessageHandler for MatchAnalyzer {
 //                     // Player summaries - including entity IDs!
 //                     // look for props like m_iUserID.<entity_id> = <user_id>
 //                     // for example, `m_iUserID.024 = 2523` means entity 24 is user 2523
+//                     // TODO: presumably we want this at 101 for increased max players
 //                     for i in 0..33 {
 //                         // 0 to 32, inclusive (1..33 might also work, not sure if there's a user 0 or not).  Not exhaustive and doesn't work for servers with > 32 players
 //                         if let Some(SendProp {
