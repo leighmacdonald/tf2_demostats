@@ -25,13 +25,15 @@ def set_next_version(next_version: str):
     content = open(cargo_path, 'r').read()
     with open(cargo_path, 'w') as f:
         try:
-            replaced =  version_re.sub(f"version = \"{next_version}\"", content)
-            f.write(replaced)
+            f.write(version_re.sub(f"version = \"{next_version}\"", content))
         except IndexError:
             return None
 
 
 def update(next_version: str):
+    if next_version.startswith("v"):
+        next_version = next_version[1:]
+
     current_version = get_current_version()
     if version(next_version) <= version(current_version):
         raise ValueError(f"Invalid version, must be greater than previous: {current_version}")
