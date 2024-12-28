@@ -1,35 +1,70 @@
-use std::collections::HashMap;
+use crate::parser::{
+    game::RoundState,
+    weapon::{Weapon, WeaponDetail},
+};
 use fnv::{FnvHashMap, FnvHashSet};
-use tf_demo_parser::demo::packet::datatable::{ParseSendTable, SendTableName, ServerClass};
-use tf_demo_parser::demo::sendprop::{SendPropIdentifier, SendPropName};
-use tf_demo_parser::{MessageType, ParserState, ReadResult, Stream};
-use tf_demo_parser::demo::data::{DemoTick, UserInfo};
-use tf_demo_parser::demo::message::Message;
-use tf_demo_parser::demo::packet::stringtable::StringTableEntry;
-use tf_demo_parser::demo::parser::MessageHandler;
+use log::{error, trace};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 use tf_demo_parser::demo::gameevent_gen::ObjectDestroyedEvent;
 use tf_demo_parser::demo::gamevent::GameEvent;
 use tf_demo_parser::demo::message::gameevent::GameEventMessage;
-use tf_demo_parser::demo::message::packetentities::{EntityId};
+use tf_demo_parser::demo::message::packetentities::{EntityId, PacketEntity};
+use tf_demo_parser::demo::message::Message;
+use tf_demo_parser::demo::packet::datatable::{
+    ClassId, ParseSendTable, SendTableName, ServerClass, ServerClassName,
+};
+use tf_demo_parser::demo::packet::stringtable::StringTableEntry;
+use tf_demo_parser::demo::parser::analyser::UserInfo as AnalyzerUserInfo;
 use tf_demo_parser::demo::parser::gamestateanalyser::UserId;
-use tf_demo_parser::demo::parser::player_summary_analyzer::PlayerSummaryState;
-use crate::parser::weapon::{Weapon, WeaponDetail};
+use tf_demo_parser::demo::parser::MessageHandler;
+use tf_demo_parser::demo::sendprop::{SendPropIdentifier, SendPropName, SendPropValue};
+use tf_demo_parser::demo::{
+    data::{DemoTick, UserInfo},
+    gameevent_gen::PlayerDeathEvent,
+};
+use tf_demo_parser::{MessageType, ParserState, ReadResult, Stream};
 
 #[derive(Default, Debug, Serialize, Deserialize)]
 pub struct MatchAnalyzer {
     props: FnvHashSet<SendPropIdentifier>,
     prop_names: FnvHashMap<SendPropIdentifier, (SendTableName, SendPropName)>,
     state: PlayerSummaryState,
-    user_id_map: HashMap<EntityId, UserId>,
+    user_entities: HashMap<EntityId, UserId>,
+    users: BTreeMap<UserId, AnalyzerUserInfo>,
+    class_names: Vec<ServerClassName>, // indexed by ClassId
+    waiting_for_players: bool,
+    round_state: RoundState,
+}
+
+#[derive(Default, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PlayerSummaryState {
+    pub player_summaries: HashMap<UserId, PlayerSummary>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct PlayerSummary {
+    pub name: String,
+    pub steamid: String,
     pub points: u32,
+    pub connection_count: u32,
+    pub bonus_points: u32,
+
     pub kills: u32,
+    pub scoreboard_kills: u32,
+    pub postround_kills: u32,
+
     pub assists: u32,
+    pub scoreboard_assists: u32, // Only present in PoV demos
+    pub postround_assists: u32,
+
+    pub suicides: u32,
+
     pub deaths: u32,
+    pub scoreboard_deaths: u32,
+    pub postround_deaths: u32,
+
+    // TODO
     pub buildings_destroyed: u32,
     pub captures: u32,
     pub defenses: u32,
@@ -40,7 +75,6 @@ pub struct PlayerSummary {
     pub teleports: u32,
     pub healing: u32,
     pub backstabs: u32,
-    pub bonus_points: u32,
     pub support: u32,
     pub damage_dealt: u32,
     pub weapon_map: HashMap<Weapon, WeaponDetail>,
@@ -57,19 +91,281 @@ impl MatchAnalyzer {
         text: Option<&str>,
         data: Option<Stream>,
     ) -> ReadResult<()> {
-        if let Some(user_info) =
-            UserInfo::parse_from_string_table(index as u16, text, data)?
-        {
-            self.state
-                .users
-                .entry(user_info.player_info.user_id)
+        if let Some(user_info) = UserInfo::parse_from_string_table(index as u16, text, data)? {
+            let entity_id = user_info.entity_id;
+            let id = user_info.player_info.user_id;
+            trace!("user info {} {id} {entity_id}", user_info.player_info.name);
+            let new_user_info = user_info.clone();
+            self.users
+                .entry(id)
                 .and_modify(|info| {
                     info.entity_id = user_info.entity_id;
                 })
-                .or_insert_with(|| user_info.into());
+                .or_insert_with(|| new_user_info.into());
+
+            self.state
+                .player_summaries
+                .entry(id)
+                .and_modify(|summary| summary.connection_count += 1)
+                .or_insert_with(|| PlayerSummary {
+                    name: user_info.player_info.name,
+                    steamid: user_info.player_info.steam_id,
+                    ..Default::default()
+                });
+
+            self.user_entities.insert(entity_id, id);
         }
 
         Ok(())
+    }
+
+    fn handle_packet_entity(&mut self, packet: &PacketEntity, parser_state: &ParserState) {
+        let Some(class) = parser_state
+            .server_classes
+            .get(<ClassId as Into<usize>>::into(packet.server_class))
+        else {
+            error!("Unknown server class: {}", packet.server_class);
+            return;
+        };
+
+        match class.name.as_str() {
+            "CTFPlayer" => self.handle_player_entity(packet, parser_state),
+            "CTFPlayerResource" => self.handle_player_resource(packet, parser_state),
+            "CTFGameRulesProxy" => self.handle_game_rules(packet, parser_state),
+            _ => {
+                trace!(
+                    "Unhandled PacketEntity: {:?} {:?}",
+                    packet,
+                    class.name.as_str()
+                );
+            }
+        }
+    }
+
+    fn handle_player_entity(&mut self, entity: &PacketEntity, _parser_state: &ParserState) {
+        // These DT_TFPlayerScoringDataExclusive props are only present in PoV demos, not STV demos.
+        //
+        // Other fields: m_iDominations, m_iRevenge,
+        // m_iBuildingsDestroyed, m_iHeadshots, m_iBackstabs,
+        // m_iHealPoints, m_iInvulns, m_iTeleports, m_iDamageDone,
+        // m_iBonusPoints, m_iPoints, m_iCaptures, m_iDefenses
+        const KILLS: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFPlayerScoringDataExclusive", "m_iKills");
+        const DEATHS: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFPlayerScoringDataExclusive", "m_iDeaths");
+        const KILL_ASSISTS: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFPlayerScoringDataExclusive", "m_iKillAssists");
+
+        let entity_id = &EntityId::from(entity.entity_index);
+        let Some(user_id) = self.user_entities.get(entity_id) else {
+            error!("Unknown player entity id: {}", entity_id);
+            return;
+        };
+
+        let Some(summary) = self.state.player_summaries.get_mut(user_id) else {
+            error!("Unknown player user id: {}", user_id);
+            return;
+        };
+
+        for prop in &entity.props {
+            trace!("Player entity {} {prop:?}", summary.name);
+            let SendPropValue::Integer(val) = prop.value else {
+                continue;
+            };
+
+            match prop.identifier {
+                KILLS => {
+                    summary.scoreboard_kills = val as u32;
+                }
+                KILL_ASSISTS => {
+                    // PoV demos include multiple different copies of
+                    // this field -- maybe per round stats? We want
+                    // the larger one.
+                    summary.scoreboard_assists = summary.scoreboard_assists.max(val as u32);
+                }
+                DEATHS => {
+                    summary.scoreboard_deaths = val as u32;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub fn handle_player_resource(&mut self, entity: &PacketEntity, _parser_state: &ParserState) {
+        for prop in &entity.props {
+            let Some((table_name, prop_name)) = prop.identifier.names() else {
+                error!("Unknown player resource prop: {:?}", prop);
+                continue;
+            };
+
+            if let Ok(player_id) = prop_name.as_str().parse::<u32>() {
+                let entity_id = EntityId::from(player_id);
+                if let Some(user_id) = self.user_entities.get(&entity_id) {
+                    if let Some(player) = self.state.player_summaries.get_mut(user_id) {
+                        match table_name.as_str() {
+                            "m_iTeam" => {}
+                            "m_iHealing" => {
+                                player.healing =
+                                    i64::try_from(&prop.value).unwrap_or_default() as u32
+                            }
+                            "m_iTotalScore" => {
+                                player.points =
+                                    i64::try_from(&prop.value).unwrap_or_default() as u32
+                            }
+                            "m_iDamage" => {
+                                player.damage_dealt =
+                                    i64::try_from(&prop.value).unwrap_or_default() as u32
+                            }
+                            "m_iDeaths" => {
+                                player.scoreboard_deaths =
+                                    i64::try_from(&prop.value).unwrap_or_default() as u32
+                            }
+                            "m_iScore" => {
+                                // iScore is close to number of kills; but counts post-game kills and decrements on suicide.
+                                player.scoreboard_kills =
+                                    i64::try_from(&prop.value).unwrap_or_default() as u32
+                            }
+                            "m_iBonusPoints" => {
+                                player.bonus_points =
+                                    i64::try_from(&prop.value).unwrap_or_default() as u32
+                            }
+                            "m_iPlayerClass" => {}
+                            "m_iPlayerLevel" => {}
+                            "m_bAlive" => {}
+                            "m_flNextRespawnTime" => {}
+                            "m_iActiveDominations" => {}
+                            "m_iDamageAssist" => {}
+                            "m_iPing" => {}
+                            "m_iChargeLevel" => {}
+                            "m_iStreaks" => {}
+                            "m_iHealth" => {}
+                            "m_iMaxHealth" => {}
+                            "m_iMaxBuffedHealth" => {}
+                            "m_iPlayerClassWhenKilled" => {}
+                            "m_bValid" => {}
+                            "m_iUserID" => {}
+                            "m_iConnectionState" => {}
+                            "m_flConnectTime" => {}
+                            "m_iDamageBoss" => {}
+                            "m_bArenaSpectator" => {}
+                            "m_iHealingAssist" => {}
+                            "m_iBuybackCredits" => {}
+                            "m_iUpgradeRefundCredits" => {}
+                            "m_iCurrencyCollected" => {}
+                            "m_iDamageBlocked" => {}
+                            "m_iAccountID" => {}
+                            "m_bConnected" => {}
+                            x => {
+                                error!("Unhandled player resource type: {x}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn handle_game_rules(&mut self, entity: &PacketEntity, _parser_state: &ParserState) {
+        const WAITING_FOR_PLAYERS: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TeamplayRoundBasedRules", "m_bInWaitingForPlayers");
+        const ROUND_STATE: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TeamplayRoundBasedRules", "m_iRoundState");
+
+        for prop in &entity.props {
+            match (prop.identifier, &prop.value) {
+                (WAITING_FOR_PLAYERS, SendPropValue::Integer(x)) => {
+                    self.waiting_for_players = *x == 1;
+                    trace!("Waiting for players: {}", self.waiting_for_players);
+                }
+                (ROUND_STATE, SendPropValue::Integer(x)) => match RoundState::try_from(*x as u16) {
+                    Ok(x) => self.round_state = x,
+                    Err(e) => error!("Could not parse RoundState: {e}"),
+                },
+                (id, value) => {
+                    trace!("Unhandled game rule: {:?} {value:?}", id.names());
+                }
+            }
+        }
+    }
+
+    pub fn handle_player_death(&mut self, death: &PlayerDeathEvent) {
+        trace!(
+            "PlayerDeath {death:?} {} {:?}",
+            self.waiting_for_players,
+            self.round_state
+        );
+        if self.waiting_for_players {
+            return;
+        }
+        let feigned = death.death_flags & 0x0020 != 0;
+
+        if death.user_id == death.attacker {
+            let Some(suicider) = self
+                .state
+                .player_summaries
+                .get_mut(&UserId::from(death.attacker as u32))
+            else {
+                error!("Unknown suicider id: {}", death.user_id);
+                return;
+            };
+            suicider.suicides += 1;
+            return;
+        }
+
+        let Some(victim) = self
+            .state
+            .player_summaries
+            .get_mut(&UserId::from(death.user_id as u32))
+        else {
+            error!("Unknown victim id: {}", death.user_id);
+            return;
+        };
+        if !feigned {
+            if self.round_state == RoundState::TeamWin {
+                victim.postround_deaths += 1;
+            } else {
+                victim.deaths += 1;
+            }
+        }
+
+        let attacker_is_world = death.attacker == 0;
+        let attacker = self
+            .state
+            .player_summaries
+            .get_mut(&UserId::from(death.attacker as u32));
+        if let Some(attacker) = attacker {
+            if !feigned {
+                if self.round_state == RoundState::TeamWin {
+                    attacker.postround_kills += 1;
+                } else {
+                    attacker.kills += 1;
+                }
+            }
+        } else if !attacker_is_world {
+            error!("Unknown attacker id: {}", death.attacker);
+            return;
+        }
+
+        if death.assister == 0xffff {
+            return;
+        }
+
+        let assister = self
+            .state
+            .player_summaries
+            .get_mut(&UserId::from(death.assister as u32));
+        if let Some(assister) = assister {
+            if !feigned {
+                if self.round_state == RoundState::TeamWin {
+                    assister.postround_assists += 1;
+                } else {
+                    assister.assists += 1;
+                }
+            }
+        } else {
+            error!("Unknown assister id: {}", death.assister);
+            return;
+        }
     }
 }
 
@@ -77,49 +373,51 @@ impl MessageHandler for MatchAnalyzer {
     type Output = PlayerSummaryState;
 
     fn does_handle(message_type: MessageType) -> bool {
-        matches!(message_type, MessageType::PacketEntities)
+        matches!(
+            message_type,
+            MessageType::PacketEntities | MessageType::GameEvent
+        )
     }
 
-    fn handle_message(&mut self, message: &Message, _tick: DemoTick, _parser_state: &ParserState) {
+    fn handle_message(&mut self, message: &Message, tick: DemoTick, parser_state: &ParserState) {
         match message {
-            // Message::PacketEntities(message) => {
-            //     for entity in message.entities.iter() {
-            //         self.handle_packet_entity(entity, parser_state);
-            //     }
-            // }
-
+            Message::NetTick(t) => {
+                trace!("Tick {tick} {t:?}");
+            }
+            Message::PacketEntities(message) => {
+                for entity in message.entities.iter() {
+                    self.handle_packet_entity(entity, parser_state);
+                }
+            }
             Message::GameEvent(GameEventMessage { event, .. }) => match event {
                 GameEvent::PlayerShoot(_) => {
-                    println!("PlayerShoot");
+                    trace!("PlayerShoot");
                 }
-                GameEvent::PlayerDeath(death) => {
-                    println!("PlayerDeath {:?}", death.user_id);
-                    //self.state.kills.push(Kill::new(self.tick, death.as_ref()))
-                }
+                GameEvent::PlayerDeath(death) => self.handle_player_death(death),
                 GameEvent::RoundStart(_) => {
-                    println!("shoot");
+                    trace!("round start");
                     // self.state.buildings.clear();
                 }
-                GameEvent::TeamPlayRoundStart(_) => {
-                    println!("TeamPlayRoundStart");
+                GameEvent::TeamPlayRoundStart(_e) => {
+                    trace!("TeamPlayRoundStart");
                     //self.state.buildings.clear();
                 }
                 GameEvent::ObjectDestroyed(ObjectDestroyedEvent { index: _, .. }) => {
-                    println!("ObjectDestroyed");
+                    //println!("ObjectDestroyed");
                     //self.state.remove_building((*index as u32).into());
                 }
                 _ => {
+                    trace!("[{tick}] Unhandled game event: {event:?}");
                     let event_string = format!("{:?}", event);
                     if event_string.contains("Shoot") {
-                        println!("player shoot event");
+                        trace!("Player shoot event");
                     }
                 }
             },
             _ => {
-                //println!("unhandled message: {message:?}");
+                trace!("Unhandled message: {message:?}");
             }
         }
-
     }
 
     fn handle_string_entry(
@@ -135,13 +433,15 @@ impl MessageHandler for MatchAnalyzer {
                 entry.text.as_ref().map(|s| s.as_ref()),
                 entry.extra_data.as_ref().map(|data| data.data.clone()),
             );
+        } else {
+            trace!("Unhandled string entry: {index} {entry:?}");
         }
     }
-    
+
     fn handle_data_tables(
         &mut self,
         parse_tables: &[ParseSendTable],
-        _server_classes: &[ServerClass],
+        server_classes: &[ServerClass],
         _parser_state: &ParserState,
     ) {
         for table in parse_tables {
@@ -150,482 +450,17 @@ impl MessageHandler for MatchAnalyzer {
                     prop_def.identifier(),
                     (table.name.clone(), prop_def.name.clone()),
                 );
+                trace!("Prop: {}. {}", table.name, prop_def.name);
             }
         }
+        self.class_names = server_classes
+            .iter()
+            .map(|class| &class.name)
+            .cloned()
+            .collect();
     }
+
     fn into_output(self, _parser_state: &ParserState) -> <Self as MessageHandler>::Output {
         self.state
     }
-
-    // fn into_output(self, _state: &ParserState) -> Self::Output {
-    //     let names = self.prop_names;
-    //     let mut props = self
-    //         .props
-    //         .into_iter()
-    //         .map(|prop| {
-    //             let (table, name) = names.get(&prop).unwrap();
-    //             format!("{}.{}", table, name)
-    //         })
-    //         .collect::<Vec<_>>();
-    //     props.sort();
-    //     props
-    // }
 }
-// 
-// /**
-//  * Helper function to make processing integer properties easier.
-//  *
-//  * parse_integer_prop(packet, "DT_TFPlayerScoringDataExclusive", "m_iPoints", |points| { println!("Scored {} points", points) });
-//  */
-// fn parse_integer_prop<F>(
-//     packet: &PacketEntity,
-//     table: &str,
-//     name: &str,
-//     parser_state: &ParserState,
-//     handler: F,
-// ) where
-//     F: FnOnce(u32),
-// {
-//     use tf_demo_parser::demo::sendprop::SendPropValue;
-// 
-//     if let Some(SendProp {
-//                     value: SendPropValue::Integer(val),
-//                     ..
-//                 }) = packet.get_prop_by_name(table, name, parser_state)
-//     {
-//         handler(val as u32);
-//     }
-// }
-// 
-// 
-// impl MatchAnalyzer {
-//     fn handle_packet_entity(&mut self, packet: &PacketEntity, parser_state: &ParserState) {
-//         use tf_demo_parser::demo::sendprop::SendPropValue;
-// 
-//         //println!("Known server classes: {:?}", parser_state.server_classes);
-// 
-//         if let Some(class) = parser_state
-//             .server_classes
-//             .get(<ClassId as Into<usize>>::into(packet.server_class))
-//         {
-//             //println!("Got a {} data packet: {:?}", class.name, packet);
-//             match class.name.as_str() {
-//                 "CTFPlayer" => {
-//                     if let Some(user_id) = self.user_id_map.get(&packet.entity_index) {
-//                         let summaries = &mut self.state.player_summaries;
-//                         let player_summary = summaries.entry(*user_id).or_default();
-// 
-//                         // Extract scoreboard information, if present, and update the player's summary accordingly
-//                         // NOTE: Multiple DT_TFPlayerScoringDataExclusive structures may be present - one for the entire match,
-//                         //       and one for just the current round.  Since we're only interested in the overall match scores,
-//                         //       we need to ignore the round-specific values.  Fortunately, this is easy - just ignore the
-//                         //       lesser value (if multiple values are present), since none of these scores are able to decrement.
-// 
-//                         /*
-//                          * Member: m_iCaptures (offset 4) (type integer) (bits 10) (Unsigned)
-//                          * Member: m_iDefenses (offset 8) (type integer) (bits 10) (Unsigned)
-//                          * Member: m_iKills (offset 12) (type integer) (bits 10) (Unsigned)
-//                          * Member: m_iDeaths (offset 16) (type integer) (bits 10) (Unsigned)
-//                          * Member: m_iSuicides (offset 20) (type integer) (bits 10) (Unsigned)
-//                          * Member: m_iDominations (offset 24) (type integer) (bits 10) (Unsigned)
-//                          * Member: m_iRevenge (offset 28) (type integer) (bits 10) (Unsigned)
-//                          * Member: m_iBuildingsBuilt (offset 32) (type integer) (bits 10) (Unsigned)
-//                          * Member: m_iBuildingsDestroyed (offset 36) (type integer) (bits 10) (Unsigned)
-//                          * Member: m_iHeadshots (offset 40) (type integer) (bits 10) (Unsigned)
-//                          * Member: m_iBackstabs (offset 44) (type integer) (bits 10) (Unsigned)
-//                          * Member: m_iHealPoints (offset 48) (type integer) (bits 20) (Unsigned)
-//                          * Member: m_iInvulns (offset 52) (type integer) (bits 10) (Unsigned)
-//                          * Member: m_iTeleports (offset 56) (type integer) (bits 10) (Unsigned)
-//                          * Member: m_iDamageDone (offset 60) (type integer) (bits 20) (Unsigned)
-//                          * Member: m_iCrits (offset 64) (type integer) (bits 10) (Unsigned)
-//                          * Member: m_iResupplyPoints (offset 68) (type integer) (bits 10) (Unsigned)
-//                          * Member: m_iKillAssists (offset 72) (type integer) (bits 12) (Unsigned)
-//                          * Member: m_iBonusPoints (offset 76) (type integer) (bits 10) (Unsigned)
-//                          * Member: m_iPoints (offset 80) (type integer) (bits 10) (Unsigned)
-//                          *
-//                          * NOTE: support points aren't included here, but is equal to the sum of m_iHealingAssist and m_iDamageAssist
-//                          * TODO: pull data for support points
-//                          */
-//                         parse_integer_prop(
-//                             packet,
-//                             "DT_TFPlayerScoringDataExclusive",
-//                             "m_iCaptures",
-//                             parser_state,
-//                             |captures| {
-//                                 if captures > player_summary.captures {
-//                                     player_summary.captures = captures;
-//                                 }
-//                             },
-//                         );
-//                         parse_integer_prop(
-//                             packet,
-//                             "DT_TFPlayerScoringDataExclusive",
-//                             "m_iDefenses",
-//                             parser_state,
-//                             |defenses| {
-//                                 if defenses > player_summary.defenses {
-//                                     player_summary.defenses = defenses;
-//                                 }
-//                             },
-//                         );
-//                         parse_integer_prop(
-//                             packet,
-//                             "DT_TFPlayerScoringDataExclusive",
-//                             "m_iKills",
-//                             parser_state,
-//                             |kills| {
-//                                 if kills > player_summary.kills {
-//                                     // TODO: This might not be accruate.  Tested with a demo file with 89 kills (88 on the scoreboard),
-//                                     // but only a 83 were reported in the scoring data.
-//                                     player_summary.kills = kills;
-//                                 }
-//                             },
-//                         );
-//                         parse_integer_prop(
-//                             packet,
-//                             "DT_TFPlayerScoringDataExclusive",
-//                             "m_iDeaths",
-//                             parser_state,
-//                             |deaths| {
-//                                 if deaths > player_summary.deaths {
-//                                     player_summary.deaths = deaths;
-//                                 }
-//                             },
-//                         );
-//                         // ignore m_iSuicides
-//                         parse_integer_prop(
-//                             packet,
-//                             "DT_TFPlayerScoringDataExclusive",
-//                             "m_iDominations",
-//                             parser_state,
-//                             |dominations| {
-//                                 if dominations > player_summary.dominations {
-//                                     player_summary.dominations = dominations;
-//                                 }
-//                             },
-//                         );
-//                         parse_integer_prop(
-//                             packet,
-//                             "DT_TFPlayerScoringDataExclusive",
-//                             "m_iRevenge",
-//                             parser_state,
-//                             |revenges| {
-//                                 if revenges > player_summary.revenges {
-//                                     player_summary.revenges = revenges;
-//                                 }
-//                             },
-//                         );
-//                         // ignore m_iBuildingsBuilt
-//                         parse_integer_prop(
-//                             packet,
-//                             "DT_TFPlayerScoringDataExclusive",
-//                             "m_iBuildingsDestroyed",
-//                             parser_state,
-//                             |buildings_destroyed| {
-//                                 if buildings_destroyed > player_summary.buildings_destroyed {
-//                                     player_summary.buildings_destroyed = buildings_destroyed;
-//                                 }
-//                             },
-//                         );
-//                         parse_integer_prop(
-//                             packet,
-//                             "DT_TFPlayerScoringDataExclusive",
-//                             "m_iHeadshots",
-//                             parser_state,
-//                             |headshots| {
-//                                 if headshots > player_summary.headshots {
-//                                     player_summary.headshots = headshots;
-//                                 }
-//                             },
-//                         );
-//                         parse_integer_prop(
-//                             packet,
-//                             "DT_TFPlayerScoringDataExclusive",
-//                             "m_iBackstabs",
-//                             parser_state,
-//                             |backstabs| {
-//                                 if backstabs > player_summary.backstabs {
-//                                     player_summary.backstabs = backstabs;
-//                                 }
-//                             },
-//                         );
-//                         parse_integer_prop(
-//                             packet,
-//                             "DT_TFPlayerScoringDataExclusive",
-//                             "m_iHealPoints",
-//                             parser_state,
-//                             |healing| {
-//                                 if healing > player_summary.healing {
-//                                     player_summary.healing = healing;
-//                                 }
-//                             },
-//                         );
-//                         parse_integer_prop(
-//                             packet,
-//                             "DT_TFPlayerScoringDataExclusive",
-//                             "m_iInvulns",
-//                             parser_state,
-//                             |ubercharges| {
-//                                 if ubercharges > player_summary.ubercharges {
-//                                     player_summary.ubercharges = ubercharges;
-//                                 }
-//                             },
-//                         );
-//                         parse_integer_prop(
-//                             packet,
-//                             "DT_TFPlayerScoringDataExclusive",
-//                             "m_iTeleports",
-//                             parser_state,
-//                             |teleports| {
-//                                 if teleports > player_summary.teleports {
-//                                     player_summary.teleports = teleports;
-//                                 }
-//                             },
-//                         );
-//                         parse_integer_prop(
-//                             packet,
-//                             "DT_TFPlayerScoringDataExclusive",
-//                             "m_iDamageDone",
-//                             parser_state,
-//                             |damage_dealt| {
-//                                 if damage_dealt > player_summary.damage_dealt {
-//                                     player_summary.damage_dealt = damage_dealt;
-//                                 }
-//                             },
-//                         );
-//                         // ignore m_iCrits
-//                         // ignore m_iResupplyPoints
-//                         parse_integer_prop(
-//                             packet,
-//                             "DT_TFPlayerScoringDataExclusive",
-//                             "m_iKillAssists",
-//                             parser_state,
-//                             |assists| {
-//                                 if assists > player_summary.assists {
-//                                     player_summary.assists = assists;
-//                                 }
-//                             },
-//                         );
-//                         parse_integer_prop(
-//                             packet,
-//                             "DT_TFPlayerScoringDataExclusive",
-//                             "m_iBonusPoints",
-//                             parser_state,
-//                             |bonus_points| {
-//                                 if bonus_points > player_summary.bonus_points {
-//                                     player_summary.bonus_points = bonus_points;
-//                                 }
-//                             },
-//                         );
-//                         parse_integer_prop(
-//                             packet,
-//                             "DT_TFPlayerScoringDataExclusive",
-//                             "m_iPoints",
-//                             parser_state,
-//                             |points| {
-//                                 if points > player_summary.points {
-//                                     player_summary.points = points;
-//                                 }
-//                             },
-//                         );
-//                     }
-//                 }
-//                 "CTFPlayerResource" => {
-//                     // Player summaries - including entity IDs!
-//                     // look for props like m_iUserID.<entity_id> = <user_id>
-//                     // for example, `m_iUserID.024 = 2523` means entity 24 is user 2523
-//                     // TODO: presumably we want this at 101 for increased max players
-//                     for i in 0..33 {
-//                         // 0 to 32, inclusive (1..33 might also work, not sure if there's a user 0 or not).  Not exhaustive and doesn't work for servers with > 32 players
-//                         if let Some(SendProp {
-//                                         value: SendPropValue::Integer(x),
-//                                         ..
-//                                     }) = packet.get_prop_by_name(
-//                             "m_iUserID",
-//                             format!("{:0>3}", i).as_str(),
-//                             parser_state,
-//                         ) {
-//                             let entity_id = EntityId::from(i as u32);
-//                             let user_id = UserId::from(x as u32);
-//                             self.user_id_map.insert(entity_id, user_id);
-//                         }
-//                     }
-//                 }
-//                 "CTFTeam" => {}
-//                 "CWorld" => {}
-//                 "CTFObjectiveResource" => {}
-//                 "CMonsterResource" => {}
-//                 "CMannVsMachineStats" => {}
-//                 "CBaseEntity" => {}
-//                 "CVoteController" => {}
-//                 "CPhysicsProp" => {}
-//                 "CFuncTrackTrain" => {}
-//                 "CObjectCartDispenser" => {}
-//                 "CParticleSystem" => {}
-//                 "CDynamicProp" => {}
-//                 "CBaseDoor" => {}
-//                 "CBaseAnimating" => {}
-//                 "CFuncRespawnRoomVisualizer" => {}
-//                 "CSprite" => {}
-//                 "CRopeKeyframe" => {}
-//                 "CLightGlow" => {}
-//                 "CTFGameRulesProxy" => {}
-//                 "CTeamRoundTimer" => {}
-//                 "CTeamTrainWatcher" => {}
-//                 "CEnvTonemapController" => {}
-//                 "CFuncAreaPortalWindow" => {}
-//                 "CFogController" => {}
-//                 "CFunc_Dust" => {}
-//                 "CBeam" => {}
-//                 "CShadowControl" => {}
-//                 "CTFViewModel" => {}
-//                 "CSceneEntity" => {}
-//                 "CTFSniperRifle" => {}
-//                 "CTFSMG" => {}
-//                 "CTFClub" => {}
-//                 "CTFWearable" => {}
-//                 "CTFFlameThrower" => {}
-//                 "CTFFlareGun_Revenge" => {}
-//                 "CTFFireAxe" => {}
-//                 "CTFRocketLauncher" => {}
-//                 "CTFShotgun_Soldier" => {}
-//                 "CTFShovel" => {}
-//                 "CTFFlareGun" => {}
-//                 "CTFSlap" => {}
-//                 "CTFMinigun" => {}
-//                 "CTFLunchBox" => {}
-//                 "CTFFists" => {}
-//                 "CTFFlameManager" => {}
-//                 "CTFGrenadeLauncher" => {}
-//                 "CTFPipebombLauncher" => {}
-//                 "CTFBottle" => {}
-//                 "CTFScatterGun" => {}
-//                 "CTFCleaver" => {}
-//                 "CTFBat_Wood" => {}
-//                 "CTFRocketLauncher_DirectHit" => {}
-//                 "CTFProjectile_Rocket" => {}
-//                 "CTFProjectile_Flare" => {}
-//                 "CTFBuffItem" => {}
-//                 "CTFPEPBrawlerBlaster" => {}
-//                 "CTFJarMilk" => {}
-//                 "CTFBat" => {}
-//                 "CTFStunBall" => {}
-//                 "CSpriteTrail" => {}
-//                 "CSniperDot" => {}
-//                 "CTFGrenadePipebombProjectile" => {}
-//                 "CTFProjectile_Cleaver" => {}
-//                 "CTFDroppedWeapon" => {}
-//                 "CTFAmmoPack" => {}
-//                 "CHalloweenSoulPack" => {}
-//                 "CTFRagdoll" => {}
-//                 "CTFRevolver" => {}
-//                 "CTFKnife" => {}
-//                 "CTFWeaponBuilder" => {}
-//                 "CTFWeaponPDA_Spy" => {}
-//                 "CTFWeaponInvis" => {}
-//                 "CVGuiScreen" => {}
-//                 "CTFShotgun_HWG" => {}
-//                 "CTFPistol_Scout" => {}
-//                 "CTFSniperRifleDecap" => {}
-//                 "CTFJar" => {}
-//                 "CTFCrossbow" => {}
-//                 "CWeaponMedigun" => {}
-//                 "CTFBonesaw" => {}
-//                 "CTFProjectile_HealingBolt" => {}
-//                 "CTFWearableRazorback" => {}
-//                 "CTFCannon" => {}
-//                 "CTFProjectile_JarMilk" => {}
-//                 "CTFWeaponSapper" => {}
-//                 "CTFSniperRifleClassic" => {}
-//                 "CTFWearableVM" => {}
-//                 "CTFPistol_ScoutSecondary" => {}
-//                 "CTFWearableDemoShield" => {}
-//                 "CTFSword" => {}
-//                 "CTFShotgun_Pyro" => {}
-//                 "CTFPowerupBottle" => {}
-//                 "CTFWeaponFlameBall" => {}
-//                 "CTFProjectile_BallOfFire" => {}
-//                 "CTFShotgunBuildingRescue" => {}
-//                 "CTFLaserPointer" => {}
-//                 "CTFWrench" => {}
-//                 "CTFWeaponPDA_Engineer_Build" => {}
-//                 "CTFWeaponPDA_Engineer_Destroy" => {}
-//                 "CTFJarGas" => {}
-//                 "CTFSpellBook" => {}
-//                 "CObjectTeleporter" => {}
-//                 "CObjectSentrygun" => {}
-//                 "CLaserDot" => {}
-//                 "CObjectDispenser" => {}
-//                 "CTFProjectile_Arrow" => {}
-//                 "CObjectSapper" => {}
-//                 "CTFPistol" => {}
-//                 "CTFRobotArm" => {}
-//                 "CTFWearableRobotArm" => {}
-//                 "CTFShotgun" => {}
-//                 "CTFParticleCannon" => {}
-//                 "CTFProjectile_EnergyBall" => {}
-//                 "CTFShotgun_Revenge" => {}
-//                 "CTFKatana" => {}
-//                 "CTFMechanicalArm" => {}
-//                 "CTFProjectile_MechanicalArmOrb" => {}
-//                 "CTFProjectile_JarGas" => {}
-//                 "CTFGasManager" => {}
-//                 "CTFTauntProp" => {}
-//                 "CTFSyringeGun" => {}
-//                 "CTFProjectile_Jar" => {}
-//                 "CTFSodaPopper" => {}
-//                 "CTFRocketPack" => {}
-//                 "CTFProjectile_SentryRocket" => {}
-//                 "CTFBat_Giftwrap" => {}
-//                 "CTFBall_Ornament" => {}
-//                 "CTFCompoundBow" => {}
-//                 "CTFChargedSMG" => {}
-//                 "CSun" => {}
-//                 "CFunc_LOD" => {}
-//                 "CTFPistol_ScoutPrimary" => {}
-//                 "CCaptureFlag" => {}
-//                 "CCaptureFlagReturnIcon" => {}
-//                 "CBoneFollower" => {}
-//                 "CWaterLODControl" => {}
-//                 "CFuncOccluder" => {}
-//                 "CCaptureZone" => {}
-//                 "CTFProjectile_EnergyRing" => {}
-//                 "CTFRaygun" => {}
-//                 "CTFLunchBox_Drink" => {}
-//                 "CTFBat_Fish" => {}
-//                 "CFuncRotating" => {}
-//                 "CPhysicsPropMultiplayer" => {}
-//                 "CTFPlayerDestructionLogic" => {}
-//                 "CSpotlightEnd" => {}
-//                 "CTFRocketLauncher_AirStrike" => {}
-//                 "CTFParachute_Secondary" => {}
-//                 "CTFBreakableSign" => {}
-// 
-//                 _other => {
-//                     println!("\"{}\" => {}", class.name.as_str(), "{}");
-//                 }
-//             }
-//         }
-//     }
-// 
-//     fn parse_user_info(
-//         &mut self,
-//         index: usize,
-//         text: Option<&str>,
-//         data: Option<Stream>,
-//     ) -> ReadResult<()> {
-//         if let Some(user_info) =
-//             UserInfo::parse_from_string_table(index as u16, text, data)?
-//         {
-//             self.state
-//                 .users
-//                 .entry(user_info.player_info.user_id)
-//                 .and_modify(|info| {
-//                     info.entity_id = user_info.entity_id;
-//                 })
-//                 .or_insert_with(|| user_info.into());
-//         }
-// 
-//         Ok(())
-//     }
-// }

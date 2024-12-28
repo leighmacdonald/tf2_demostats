@@ -1,11 +1,11 @@
+mod game;
 pub mod summarizer;
 mod weapon;
 
 use tf_demo_parser::demo::header::Header;
-use tf_demo_parser::demo::parser::player_summary_analyzer::PlayerSummaryState;
 use tf_demo_parser::{Demo, DemoParser};
 
-pub fn parse(buffer: &[u8]) -> tf_demo_parser::Result<(Header, PlayerSummaryState)> {
+pub fn parse(buffer: &[u8]) -> tf_demo_parser::Result<(Header, summarizer::PlayerSummaryState)> {
     let demo = Demo::new(&buffer);
     let handler = summarizer::MatchAnalyzer::new();
     let stream = demo.get_stream();

@@ -1,11 +1,10 @@
-use crate::parser;
+use crate::{parser, parser::summarizer::PlayerSummaryState};
 use actix_multipart::form::tempfile::TempFile;
 use actix_multipart::form::MultipartForm;
 use actix_web::{HttpResponse, Responder};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use tf_demo_parser::demo::header::Header;
-use tf_demo_parser::demo::parser::player_summary_analyzer::PlayerSummaryState;
 
 #[derive(Debug, MultipartForm)]
 pub struct UploadForm {
