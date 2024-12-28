@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use std::io::Read;
 use tf_demo_parser::demo::header::Header;
 use tf_demo_parser::demo::parser::player_summary_analyzer::PlayerSummaryState;
-use tf_demo_parser::{Demo, DemoParser};
 
 #[derive(Debug, MultipartForm)]
 pub struct UploadForm {
@@ -30,12 +29,8 @@ pub async fn save_files(MultipartForm(mut form): MultipartForm<UploadForm>) -> i
             return HttpResponse::BadRequest().body(e.to_string());
         }
     };
-    let demo = Demo::new(&buffer);
-    let handler = parser::summarizer::MatchAnalyzer::new();
-    let stream = demo.get_stream();
-    let parser = DemoParser::new_with_analyser(stream, handler);
 
-    let (header, state) = match parser.parse() {
+    let (header, state) = match parser::parse(&buffer) {
         Ok((h, s)) => (h, s),
         Err(e) => {
             log::error!("Failed to parse upload {:?}", e);
