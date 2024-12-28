@@ -30,7 +30,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(TempFileConfig::default().directory("tmp"))
             .app_data(
                 MultipartFormConfig::default()
-                    .total_limit(350 * 1024 * 1024) // 350 MB
+                    .total_limit(1000 * 1024 * 1024) // 1000 GB
                     .memory_limit(100 * 1024 * 1024) // 100 MB
                     .error_handler(handle_multipart_error),
             )
