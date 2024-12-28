@@ -1,4 +1,4 @@
-use crate::{parser, parser::summarizer::PlayerSummaryState};
+use crate::parser::{self, summarizer::DemoSummary};
 use actix_multipart::form::tempfile::TempFile;
 use actix_multipart::form::MultipartForm;
 use actix_web::{HttpResponse, Responder};
@@ -14,7 +14,7 @@ pub struct UploadForm {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct DemoDetail {
-    state: PlayerSummaryState,
+    state: DemoSummary,
     header: Header,
 }
 

@@ -2,7 +2,6 @@ use crate::parser::{
     game::RoundState,
     weapon::{Weapon, WeaponDetail},
 };
-use fnv::{FnvHashMap, FnvHashSet};
 use log::{error, trace};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -11,41 +10,97 @@ use tf_demo_parser::demo::gamevent::GameEvent;
 use tf_demo_parser::demo::message::gameevent::GameEventMessage;
 use tf_demo_parser::demo::message::packetentities::{EntityId, PacketEntity};
 use tf_demo_parser::demo::message::Message;
-use tf_demo_parser::demo::packet::datatable::{
-    ClassId, ParseSendTable, SendTableName, ServerClass, ServerClassName,
-};
+use tf_demo_parser::demo::packet::datatable::{ClassId, ParseSendTable, ServerClass};
 use tf_demo_parser::demo::packet::stringtable::StringTableEntry;
-use tf_demo_parser::demo::parser::analyser::UserInfo as AnalyzerUserInfo;
 use tf_demo_parser::demo::parser::gamestateanalyser::UserId;
+use tf_demo_parser::demo::parser::gamestateanalyser::{Class, Team};
 use tf_demo_parser::demo::parser::MessageHandler;
-use tf_demo_parser::demo::sendprop::{SendPropIdentifier, SendPropName, SendPropValue};
+use tf_demo_parser::demo::sendprop::{SendPropIdentifier, SendPropValue};
 use tf_demo_parser::demo::{
     data::{DemoTick, UserInfo},
     gameevent_gen::PlayerDeathEvent,
 };
 use tf_demo_parser::{MessageType, ParserState, ReadResult, Stream};
 
-#[derive(Default, Debug, Serialize, Deserialize)]
-pub struct MatchAnalyzer {
-    props: FnvHashSet<SendPropIdentifier>,
-    prop_names: FnvHashMap<SendPropIdentifier, (SendTableName, SendPropName)>,
-    state: PlayerSummaryState,
-    user_entities: HashMap<EntityId, UserId>,
-    users: BTreeMap<UserId, AnalyzerUserInfo>,
-    class_names: Vec<ServerClassName>, // indexed by ClassId
-    waiting_for_players: bool,
-    round_state: RoundState,
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlayerMeta {
+    pub name: String,
+    entity_id: u32,
+    pub user_id: u32,
+    pub steam_id: String,
+    //extra: u32, // all my sources say these 4 bytes don't exist
+    //friends_id: u32,
+    //friends_name_bytes: [u8; 32], // seem to all be 0 now
+    pub is_fake_player: bool,
+    pub is_hl_tv: bool,
+    pub is_replay: bool,
+    // pub custom_file: [u32; 4],
+    // pub files_downloaded: u32,
+    // pub more_extra: u8,
 }
 
-#[derive(Default, Debug, Serialize, Deserialize, PartialEq)]
-pub struct PlayerSummaryState {
+#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct DemoSummary {
     pub player_summaries: HashMap<UserId, PlayerSummary>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct MatchAnalyzer {
+    state: DemoSummary,
+    user_entities: HashMap<EntityId, UserId>,
+    users: BTreeMap<UserId, PlayerMeta>,
+    waiting_for_players: bool,
+    round_state: RoundState,
+    user_id_map: HashMap<EntityId, u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct Killstreak {
+    pub user_id: u32,
+    pub class: Class,
+    pub duration: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct PlayerClass {
+    pub class: Class,
+    pub kills: u32,
+    pub assists: u32,
+    pub deaths: u32,
+    pub playtime: u32,
+    pub dominations: u32,
+    pub dominated: u32,
+    pub revenges: u32,
+    pub damage: u32,
+    pub damage_taken: u32,
+    pub healing_taken: u32,
+    pub captures: u32,
+    pub captures_blocked: u32,
+    pub building_destroyed: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct HealersSummary {
+    pub healing: u32,
+    pub charges_uber: u32,
+    pub charges_kritz: u32,
+    pub charges_vacc: u32,
+    pub charges_quickfix: u32,
+    pub drops: u32,
+    pub near_full_charge_death: u32,
+    pub avg_uber_length: u32,
+    pub major_adv_lost: u32,
+    pub biggest_adv_lost: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct PlayerSummary {
     pub name: String,
     pub steamid: String,
+
+    pub team: Team,
+    pub time_start: u32, // ticks instead?
+    pub time_end: u32,
     pub points: u32,
     pub connection_count: u32,
     pub bonus_points: u32,
@@ -65,19 +120,36 @@ pub struct PlayerSummary {
     pub postround_deaths: u32,
 
     // TODO
-    pub buildings_destroyed: u32,
-    pub captures: u32,
     pub defenses: u32,
     pub dominations: u32,
+    pub dominated: u32,
     pub revenges: u32,
+    pub damage: u32,
+    pub damage_taken: u32,
+    pub healing_taken: u32,
+    pub health_packs: u32,
+    pub healing_packs: u32, // total healing from packs
+    pub captures: u32,
+    pub captures_blocked: u32,
+    pub extinguishes: u32,
+    pub building_built: u32,
+    pub buildings_destroyed: u32,
+    pub airshots: u32,
     pub ubercharges: u32,
     pub headshots: u32,
+    pub shots: u32,
+    pub hits: u32,
     pub teleports: u32,
-    pub healing: u32,
     pub backstabs: u32,
     pub support: u32,
     pub damage_dealt: u32,
-    pub weapon_map: HashMap<Weapon, WeaponDetail>,
+
+    pub healing: HealersSummary,
+    //pub bonus_points: u32,
+    //pub support: u32,
+    pub classes: HashMap<ClassId, PlayerClass>,
+    pub killstreaks: Vec<Killstreak>,
+    pub weapons: HashMap<Weapon, WeaponDetail>,
 }
 
 impl MatchAnalyzer {
@@ -95,13 +167,22 @@ impl MatchAnalyzer {
             let entity_id = user_info.entity_id;
             let id = user_info.player_info.user_id;
             trace!("user info {} {id} {entity_id}", user_info.player_info.name);
+
             let new_user_info = user_info.clone();
             self.users
                 .entry(id)
                 .and_modify(|info| {
-                    info.entity_id = user_info.entity_id;
+                    info.entity_id = new_user_info.entity_id.into();
                 })
-                .or_insert_with(|| new_user_info.into());
+                .or_insert_with(|| PlayerMeta {
+                    name: new_user_info.player_info.name,
+                    entity_id: new_user_info.entity_id.into(),
+                    user_id: new_user_info.player_info.user_id.into(),
+                    steam_id: new_user_info.player_info.steam_id,
+                    is_fake_player: new_user_info.player_info.is_fake_player > 0,
+                    is_hl_tv: new_user_info.player_info.is_hl_tv > 0,
+                    is_replay: new_user_info.player_info.is_replay > 0,
+                });
 
             self.state
                 .player_summaries
@@ -205,8 +286,7 @@ impl MatchAnalyzer {
                         match table_name.as_str() {
                             "m_iTeam" => {}
                             "m_iHealing" => {
-                                player.healing =
-                                    i64::try_from(&prop.value).unwrap_or_default() as u32
+                                // TODO
                             }
                             "m_iTotalScore" => {
                                 player.points =
@@ -370,7 +450,7 @@ impl MatchAnalyzer {
 }
 
 impl MessageHandler for MatchAnalyzer {
-    type Output = PlayerSummaryState;
+    type Output = DemoSummary;
 
     fn does_handle(message_type: MessageType) -> bool {
         matches!(
@@ -440,24 +520,10 @@ impl MessageHandler for MatchAnalyzer {
 
     fn handle_data_tables(
         &mut self,
-        parse_tables: &[ParseSendTable],
-        server_classes: &[ServerClass],
+        _parse_tables: &[ParseSendTable],
+        _server_classes: &[ServerClass],
         _parser_state: &ParserState,
     ) {
-        for table in parse_tables {
-            for prop_def in &table.props {
-                self.prop_names.insert(
-                    prop_def.identifier(),
-                    (table.name.clone(), prop_def.name.clone()),
-                );
-                trace!("Prop: {}. {}", table.name, prop_def.name);
-            }
-        }
-        self.class_names = server_classes
-            .iter()
-            .map(|class| &class.name)
-            .cloned()
-            .collect();
     }
 
     fn into_output(self, _parser_state: &ParserState) -> <Self as MessageHandler>::Output {
