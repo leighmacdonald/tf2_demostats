@@ -11,7 +11,7 @@ use tf_demo_parser::{Demo, DemoParser};
 #[derive(Debug, MultipartForm)]
 pub struct UploadForm {
     #[multipart(rename = "file")]
-    files: Vec<TempFile>,
+    file: TempFile,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -20,44 +20,32 @@ struct DemoDetail {
     header: Header,
 }
 
-pub async fn save_files(MultipartForm(form): MultipartForm<UploadForm>) -> impl Responder {
-    for mut f in form.files {
-        let path = f.file_name.unwrap();
-        println!("Reading file: {:?}", path);
+pub async fn save_files(MultipartForm(mut form): MultipartForm<UploadForm>) -> impl Responder {
+    let mut buffer = Vec::new();
 
-        let mut buffer = Vec::new();
+    match form.file.file.read_to_end(&mut buffer) {
+        Ok(f) => f,
+        Err(e) => {
+            log::error!("Failed to read upload {:?}", e);
+            return HttpResponse::BadRequest().body(e.to_string());
+        }
+    };
+    let demo = Demo::new(&buffer);
+    let handler = parser::summarizer::MatchAnalyzer::new();
+    let stream = demo.get_stream();
+    let parser = DemoParser::new_with_analyser(stream, handler);
 
-        match f.file.read_to_end(&mut buffer) {
-            Ok(f) => f,
-            Err(e) => {
-                log::error!("Failed to read upload {:?}", e);
-                return HttpResponse::InternalServerError().body(e.to_string());
-            }
-        };
-        let demo = Demo::new(&buffer);
-        let handler = parser::summarizer::MatchAnalyzer::new();
-        let stream = demo.get_stream();
-        let parser = DemoParser::new_with_analyser(stream, handler);
+    let (header, state) = match parser.parse() {
+        Ok((h, s)) => (h, s),
+        Err(e) => {
+            log::error!("Failed to parse upload {:?}", e);
+            return HttpResponse::BadRequest().body(e.to_string());
+        }
+    };
 
-        let (header, state) = match parser.parse() {
-            Ok((h, s)) => (h, s),
-            Err(e) => {
-                log::error!("Failed to parse upload {:?}", e);
-                return HttpResponse::BadRequest().body(e.to_string());
-            }
-        };
+    let detail = DemoDetail { header, state };
 
-        // println!("{:?}", header);
-        // println!("{:?}", state);
-
-        let detail = DemoDetail { header, state };
-
-        return HttpResponse::Ok().json(detail);
-    }
-
-    println!("Invalid request");
-
-    HttpResponse::BadRequest().finish()
+    HttpResponse::Ok().json(detail)
 }
 
 pub async fn index() -> HttpResponse {
