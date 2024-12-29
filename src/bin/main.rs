@@ -1,27 +1,30 @@
-use std::{env, fs};
-use actix_web::{web, App, HttpServer, middleware, error, HttpResponse, HttpRequest, Error};
-use actix_multipart::form::{
-    tempfile::{TempFileConfig},
-};
+use actix_multipart::form::tempfile::TempFileConfig;
 use actix_multipart::form::MultipartFormConfig;
+use actix_web::{error, middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer};
+use std::{env, fs};
 use tf2_demostats::web::handler;
-
+use tracing::info;
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 fn handle_multipart_error(err: actix_multipart::MultipartError, _req: &HttpRequest) -> Error {
-    let response = HttpResponse::BadRequest()
-        .force_close()
-        .finish();
+    let response = HttpResponse::BadRequest().force_close().finish();
     error::InternalError::from_response(err, response).into()
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let host = env::var("DEMO_HOST").unwrap_or_else(|_e| String::from("0.0.0.0"));
-    let port = env::var("DEMO_PORT").unwrap_or_else(|_e| String::from("8811")).parse().unwrap();
+    let port = env::var("DEMO_PORT")
+        .unwrap_or_else(|_e| String::from("8811"))
+        .parse()
+        .unwrap();
 
     fs::create_dir_all("tmp")?;
-    env_logger::init_from_env(env_logger::Env::new().default_filter_or("debug"));
-    log::info!("Starting HTTP Service on {}:{}", &host, &port);
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(EnvFilter::from_default_env())
+        .init();
+    info!("Starting HTTP Service on {}:{}", &host, &port);
 
     HttpServer::new(|| {
         App::new()

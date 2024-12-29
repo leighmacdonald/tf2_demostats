@@ -2,7 +2,6 @@ use crate::parser::{
     game::RoundState,
     weapon::{Weapon, WeaponDetail},
 };
-use log::{error, trace};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use tf_demo_parser::demo::gameevent_gen::ObjectDestroyedEvent;
@@ -21,6 +20,7 @@ use tf_demo_parser::demo::{
     gameevent_gen::PlayerDeathEvent,
 };
 use tf_demo_parser::{MessageType, ParserState, ReadResult, Stream};
+use tracing::{error, info_span, span::EnteredSpan, trace};
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlayerMeta {
@@ -44,7 +44,7 @@ pub struct DemoSummary {
     pub player_summaries: HashMap<UserId, PlayerSummary>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct MatchAnalyzer {
     state: DemoSummary,
     user_entities: HashMap<EntityId, UserId>,
@@ -52,6 +52,8 @@ pub struct MatchAnalyzer {
     waiting_for_players: bool,
     round_state: RoundState,
     user_id_map: HashMap<EntityId, u32>,
+    #[serde(skip)]
+    span: Option<EnteredSpan>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -455,14 +457,26 @@ impl MessageHandler for MatchAnalyzer {
     fn does_handle(message_type: MessageType) -> bool {
         matches!(
             message_type,
-            MessageType::PacketEntities | MessageType::GameEvent
+            MessageType::PacketEntities | MessageType::GameEvent | MessageType::NetTick
         )
     }
 
     fn handle_message(&mut self, message: &Message, tick: DemoTick, parser_state: &ParserState) {
         match message {
             Message::NetTick(t) => {
-                trace!("Tick {tick} {t:?}");
+                // Must explicitly drop the old span to avoid creating
+                // a cycle where the new span points to the old span.
+                self.span = None;
+
+                self.span = Some(
+                    info_span!(
+                        "Tick",
+                        "Tick={},ServerTick={}",
+                        (u32::from(tick)),
+                        (u32::from(t.tick))
+                    )
+                    .entered(),
+                );
             }
             Message::PacketEntities(message) => {
                 for entity in message.entities.iter() {
@@ -487,7 +501,7 @@ impl MessageHandler for MatchAnalyzer {
                     //self.state.remove_building((*index as u32).into());
                 }
                 _ => {
-                    trace!("[{tick}] Unhandled game event: {event:?}");
+                    trace!("Unhandled game event: {event:?}");
                     let event_string = format!("{:?}", event);
                     if event_string.contains("Shoot") {
                         trace!("Player shoot event");

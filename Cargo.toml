@@ -23,9 +23,9 @@ path = "src/bin/cli.rs"
 [dependencies]
 actix-web = "4.9"
 actix-multipart = "0.7.2"
-env_logger = "0.11.3"
-log = "0.4.21"
-tf-demo-parser = "0.5.1"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tf-demo-parser = { version = "0.5.1", features = ["tracing"] }
 fnv = "1.0.7"
 tokio = { version = "1.24.2", features = ["rt", "rt-multi-thread", "macros"] }
 serde = { version = "1.0.197", features = ["derive"] }
