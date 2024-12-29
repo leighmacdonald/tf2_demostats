@@ -19,7 +19,7 @@ pub struct DemoOutput {
 }
 
 pub fn parse(buffer: &[u8]) -> tf_demo_parser::Result<DemoOutput> {
-    let demo = Demo::new(&buffer);
+    let demo = Demo::new(buffer);
     let handler = summarizer::MatchAnalyzer::new();
     let stream = demo.get_stream();
     let parser = DemoParser::new_with_analyser(stream, handler);

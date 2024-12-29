@@ -18,6 +18,11 @@ pub enum RoundState {
     BetweenRounds = 10,
 }
 
+pub const DEATH_FEIGNED: u16 = 0x0020;
+
+pub const ENTITY_ON_GROUND: u16 = 1;
+pub const ENTITY_IN_WATER: u16 = 1 << 9;
+
 #[derive(Deserialize, Serialize, IntoPrimitive, TryFromPrimitive, PartialEq, Debug)]
 #[repr(u16)]
 pub enum WeaponId {
@@ -126,4 +131,48 @@ pub enum WeaponId {
     WeaponPasstimeGun = 102,
     WeaponSniperrifleRevolver = 103,
     WeaponChargedSmg = 104,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TryFromPrimitive)]
+pub enum PlayerAnim {
+    AttackPrimary,
+    AttackSecondary,
+    AttackGrenade,
+    Reload,
+    ReloadLoop,
+    ReloadEnd,
+    Jump,
+    Swim,
+    Die,
+    FlinchChest,
+    FlinchHead,
+    FlinchLeftarm,
+    FlinchRightarm,
+    FlinchLeftleg,
+    FlinchRightleg,
+    Doublejump,
+    Cancel,
+    Spawn,
+    SnapYaw,
+    Custom, // Used to play specific activities
+    CustomGesture,
+    CustomSequence, // Used to play specific sequences
+    CustomGestureSequence,
+    AttackPre,
+    AttackPost,
+    Grenade1Draw,
+    Grenade2Draw,
+    Grenade1Throw,
+    Grenade2Throw,
+    VoiceCommandGesture,
+    DoublejumpCrouch,
+    StunBegin,
+    StunMiddle,
+    StunEnd,
+    PasstimeThrowBegin,
+    PasstimeThrowMiddle,
+    PasstimeThrowEnd,
+    PasstimeThrowCancel,
+    AttackPrimarySuper,
 }
