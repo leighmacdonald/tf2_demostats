@@ -10,7 +10,8 @@ async fn main() -> std::io::Result<()> {
     for arg in env::args().skip(1) {
         let path = path::Path::new(&arg);
         let bytes = tokio::fs::read(path).await?;
-        let demo = parser::parse(&bytes).expect("Demo should parse");
+        let mut demo = parser::parse(&bytes).expect("Demo should parse");
+        demo.filename = Some(arg);
         println!("{}", serde_json::to_string(&demo).unwrap());
     }
 
