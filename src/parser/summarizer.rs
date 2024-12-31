@@ -260,7 +260,7 @@ impl MatchAnalyzer {
 
         let entity_id = &entity.entity_index;
         let Some(user_id) = self.user_entities.get(entity_id) else {
-            error!("Unknown player entity id: {}", entity_id);
+            error!("Unknown player entity id: {entity_id}");
             return;
         };
 
