@@ -529,11 +529,8 @@ impl MatchAnalyzer {
     }
 
     pub fn handle_player_hurt(&mut self, hurt: &PlayerHurtEvent) {
-        //         let entity_id = EntityId::from(hurt.user_id as u32);
-        //         let Some(uid) = self.user_entities.get(&entity_id) else {
-        //             error!("Unknown entity id {entity_id} in capture blocked event");
-        //             return;
-        //         };
+        trace!("Player hurt {:?}", hurt);
+
         let uid = UserId::from(hurt.user_id);
         let Some(summary) = self.state.player_summaries.get_mut(&uid) else {
             error!("Unknown victim uid {uid} in player hurt event");
@@ -541,12 +538,6 @@ impl MatchAnalyzer {
         };
 
         summary.damage_taken += hurt.damage_amount as u32;
-
-        //         let entity_id = EntityId::from(hurt.attacker as u32);
-        //         let Some(uid) = self.user_entities.get(&entity_id) else {
-        //             error!("Unknown entity id {entity_id} in capture blocked event");
-        //             return;
-        //         };
 
         let uid = UserId::from(hurt.user_id);
         let Some(summary) = self.state.player_summaries.get_mut(&uid) else {
@@ -564,14 +555,6 @@ impl MatchAnalyzer {
             Err(_) => error!("Unknown damage type: {}", hurt.custom),
             _ => {}
         }
-
-        // 				match damage_type
-        //         if damage_type
-        //             summary.headshots += 1;
-        //         }
-        // 				if summary.headshots {
-        //             summary.headshots += 1;
-        //         }
     }
 }
 
