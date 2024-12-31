@@ -4,23 +4,21 @@ use crate::parser::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use tf_demo_parser::demo::gameevent_gen::{
-    ObjectDestroyedEvent, PlayerHurtEvent, TeamPlayCaptureBlockedEvent, TeamPlayPointCapturedEvent,
-};
 use tf_demo_parser::demo::gamevent::GameEvent;
 use tf_demo_parser::demo::message::gameevent::GameEventMessage;
 use tf_demo_parser::demo::message::packetentities::{EntityId, PacketEntity};
 use tf_demo_parser::demo::message::Message;
 use tf_demo_parser::demo::packet::datatable::{ClassId, ParseSendTable, ServerClass};
 use tf_demo_parser::demo::packet::stringtable::StringTableEntry;
-use tf_demo_parser::demo::parser::gamestateanalyser::UserId;
-use tf_demo_parser::demo::parser::gamestateanalyser::{Class, Team};
+use tf_demo_parser::demo::parser::gamestateanalyser::{Class, Team, UserId};
 use tf_demo_parser::demo::parser::MessageHandler;
-use tf_demo_parser::demo::sendprop::{SendPropIdentifier, SendPropValue};
-use tf_demo_parser::demo::{data::ServerTick, gameevent_gen::ObjectDestroyedEvent};
 use tf_demo_parser::demo::{
-    data::{DemoTick, UserInfo},
-    gameevent_gen::PlayerDeathEvent,
+    data::{DemoTick, ServerTick, UserInfo},
+    gameevent_gen::{
+        ObjectDestroyedEvent, PlayerDeathEvent, PlayerHurtEvent, TeamPlayCaptureBlockedEvent,
+        TeamPlayPointCapturedEvent,
+    },
+    sendprop::{SendPropIdentifier, SendPropValue},
 };
 use tf_demo_parser::{MessageType, ParserState, ReadResult, Stream};
 use tracing::{debug, error, error_span, span::EnteredSpan, trace};
@@ -163,6 +161,8 @@ pub struct PlayerSummary {
     in_water: bool,
     #[serde(skip)]
     started_flying: DemoTick,
+    #[serde(skip)]
+    class: Class,
 }
 
 impl PlayerSummary {
@@ -258,6 +258,8 @@ impl MatchAnalyzer {
 
         // Props that always are available
         const FLAGS: SendPropIdentifier = SendPropIdentifier::new("DT_BasePlayer", "m_fFlags");
+        const CLASS: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFPlayerClassShared", "m_iClass");
 
         let entity_id = &entity.entity_index;
         let Some(user_id) = self.user_entities.get(entity_id) else {
@@ -271,17 +273,26 @@ impl MatchAnalyzer {
         };
 
         for prop in &entity.props {
-            trace!("Player entity {} {prop:?}", summary.name);
-            let SendPropValue::Integer(val) = prop.value else {
-                continue;
-            };
-
-            match prop.identifier {
-                FLAGS => {
+            match (prop.identifier, &prop.value) {
+                (KILLS, SendPropValue::Integer(val)) => {
+                    summary.scoreboard_kills = Some(*val as u32);
+                }
+                (KILL_ASSISTS, SendPropValue::Integer(val)) => {
+                    // PoV demos include multiple different copies of
+                    // this field -- maybe per round stats? We want
+                    // the larger one.
+                    summary.scoreboard_assists =
+                        Some(summary.scoreboard_assists.unwrap_or(0).max(*val as u32));
+                }
+                (DEATHS, SendPropValue::Integer(val)) => {
+                    summary.scoreboard_deaths = Some(*val as u32);
+                }
+                (FLAGS, SendPropValue::Integer(val)) => {
                     let was_in_air = summary.in_air();
 
-                    summary.on_ground = (val as u16) & ENTITY_ON_GROUND != 0;
-                    summary.in_water = (val as u16) & ENTITY_IN_WATER != 0;
+                    let flags = *val as u16;
+                    summary.on_ground = flags & ENTITY_ON_GROUND != 0;
+                    summary.in_water = flags & ENTITY_IN_WATER != 0;
 
                     let now_in_air = summary.in_air();
 
@@ -289,22 +300,16 @@ impl MatchAnalyzer {
                         summary.started_flying = self.tick;
                     }
                 }
-
-                KILLS => {
-                    summary.scoreboard_kills = Some(val as u32);
+                (CLASS, SendPropValue::Integer(val)) => {
+                    let Ok(class) = Class::try_from(*val as u8) else {
+                        error!("Unknown classid {val}");
+                        continue;
+                    };
+                    summary.class = class;
                 }
-                KILL_ASSISTS => {
-                    // PoV demos include multiple different copies of
-                    // this field -- maybe per round stats? We want
-                    // the larger one.
-                    summary.scoreboard_assists =
-                        Some(summary.scoreboard_assists.unwrap_or(0).max(val as u32));
+                _ => {
+                    trace!("Unhandled player ({}) entity prop {prop:?}", summary.name);
                 }
-                DEATHS => {
-                    summary.scoreboard_deaths = Some(val as u32);
-                }
-
-                _ => {}
             }
         }
     }
