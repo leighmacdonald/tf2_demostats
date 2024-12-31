@@ -1,6 +1,5 @@
 use crate::parser;
-use actix_multipart::form::tempfile::TempFile;
-use actix_multipart::form::MultipartForm;
+use actix_multipart::form::{tempfile::TempFile, MultipartForm};
 use actix_web::{HttpResponse, Responder};
 use std::io::Read;
 use tracing::error;
