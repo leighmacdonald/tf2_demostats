@@ -3,6 +3,7 @@ use actix_multipart::form::tempfile::TempFile;
 use actix_multipart::form::MultipartForm;
 use actix_web::{HttpResponse, Responder};
 use std::io::Read;
+use tracing::error;
 
 #[derive(Debug, MultipartForm)]
 pub struct UploadForm {
@@ -16,7 +17,7 @@ pub async fn save_files(MultipartForm(mut form): MultipartForm<UploadForm>) -> i
     match form.file.file.read_to_end(&mut buffer) {
         Ok(f) => f,
         Err(e) => {
-            log::error!("Failed to read upload {:?}", e);
+            error!("Failed to read upload {:?}", e);
             return HttpResponse::BadRequest().body(e.to_string());
         }
     };
@@ -24,7 +25,7 @@ pub async fn save_files(MultipartForm(mut form): MultipartForm<UploadForm>) -> i
     let mut output = match parser::parse(&buffer) {
         Ok(o) => o,
         Err(e) => {
-            log::error!("Failed to parse upload {:?}", e);
+            error!("Failed to parse upload {:?}", e);
             return HttpResponse::BadRequest().body(e.to_string());
         }
     };
