@@ -23,7 +23,7 @@ use tf_demo_parser::demo::{
     gameevent_gen::PlayerDeathEvent,
 };
 use tf_demo_parser::{MessageType, ParserState, ReadResult, Stream};
-use tracing::{debug, error, info_span, span::EnteredSpan, trace};
+use tracing::{debug, error, error_span, span::EnteredSpan, trace};
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlayerMeta {
@@ -593,7 +593,7 @@ impl MessageHandler for MatchAnalyzer {
                 self.span = None;
 
                 self.span = Some(
-                    info_span!(
+                    error_span!(
                         "Tick",
                         "Tick={},ServerTick={}",
                         (u32::from(tick)),
