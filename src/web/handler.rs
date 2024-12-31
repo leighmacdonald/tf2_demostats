@@ -1,21 +1,13 @@
-use crate::parser::{self, summarizer::DemoSummary};
+use crate::parser;
 use actix_multipart::form::tempfile::TempFile;
 use actix_multipart::form::MultipartForm;
 use actix_web::{HttpResponse, Responder};
-use serde::{Deserialize, Serialize};
 use std::io::Read;
-use tf_demo_parser::demo::header::Header;
 
 #[derive(Debug, MultipartForm)]
 pub struct UploadForm {
     #[multipart(rename = "file")]
     file: TempFile,
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-struct DemoDetail {
-    state: DemoSummary,
-    header: Header,
 }
 
 pub async fn save_files(MultipartForm(mut form): MultipartForm<UploadForm>) -> impl Responder {
@@ -29,17 +21,17 @@ pub async fn save_files(MultipartForm(mut form): MultipartForm<UploadForm>) -> i
         }
     };
 
-    let (header, state) = match parser::parse(&buffer) {
-        Ok((h, s)) => (h, s),
+    let mut output = match parser::parse(&buffer) {
+        Ok(o) => o,
         Err(e) => {
             log::error!("Failed to parse upload {:?}", e);
             return HttpResponse::BadRequest().body(e.to_string());
         }
     };
 
-    let detail = DemoDetail { header, state };
+    output.filename = form.file.file_name;
 
-    HttpResponse::Ok().json(detail)
+    HttpResponse::Ok().json(output)
 }
 
 pub async fn index() -> HttpResponse {
