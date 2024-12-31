@@ -1,9 +1,12 @@
 use crate::parser::{
-    game::{RoundState, DEATH_FEIGNED, ENTITY_IN_WATER, ENTITY_ON_GROUND},
+    game::{DamageType, RoundState, DEATH_FEIGNED, ENTITY_IN_WATER, ENTITY_ON_GROUND},
     weapon::{Weapon, WeaponDetail},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use tf_demo_parser::demo::gameevent_gen::{
+    ObjectDestroyedEvent, PlayerHurtEvent, TeamPlayCaptureBlockedEvent, TeamPlayPointCapturedEvent,
+};
 use tf_demo_parser::demo::gamevent::GameEvent;
 use tf_demo_parser::demo::message::gameevent::GameEventMessage;
 use tf_demo_parser::demo::message::packetentities::{EntityId, PacketEntity};
@@ -123,8 +126,10 @@ pub struct PlayerSummary {
     pub scoreboard_deaths: Option<u32>,
     pub postround_deaths: u32,
 
+    pub captures: u32,
+    pub captures_blocked: u32,
+
     // TODO
-    pub defenses: u32,
     pub dominations: u32,
     pub dominated: u32,
     pub revenges: u32,
@@ -133,8 +138,6 @@ pub struct PlayerSummary {
     pub healing_taken: u32,
     pub health_packs: u32,
     pub healing_packs: u32, // total healing from packs
-    pub captures: u32,
-    pub captures_blocked: u32,
     pub extinguishes: u32,
     pub building_built: u32,
     pub buildings_destroyed: u32,
@@ -490,6 +493,83 @@ impl MatchAnalyzer {
             error!("Unknown assister id: {}", death.assister);
         }
     }
+
+    pub fn handle_point_captures(&mut self, cap: &TeamPlayPointCapturedEvent) {
+        for entity_id in cap.cappers.as_bytes() {
+            let Some(uid) = self.user_entities.get(&EntityId::from(*entity_id as u32)) else {
+                error!("Unknown entity id {entity_id} in capture event");
+                continue;
+            };
+
+            let Some(summary) = self.state.player_summaries.get_mut(uid) else {
+                error!("Unknown uid {uid} from entity id {entity_id} in capture event");
+                continue;
+            };
+            debug!("Capture by {}", summary.name);
+            summary.captures += 1;
+        }
+    }
+
+    pub fn handle_capture_blocked(&mut self, cap: &TeamPlayCaptureBlockedEvent) {
+        let entity_id = EntityId::from(cap.blocker as u32);
+        let Some(uid) = self.user_entities.get(&entity_id) else {
+            error!("Unknown entity id {entity_id} in capture blocked event");
+            return;
+        };
+
+        let Some(summary) = self.state.player_summaries.get_mut(uid) else {
+            error!("Unknown uid {uid} from entity id {entity_id} in capture blocked event");
+            return;
+        };
+
+        summary.captures_blocked += 1;
+    }
+
+    pub fn handle_player_hurt(&mut self, hurt: &PlayerHurtEvent) {
+        //         let entity_id = EntityId::from(hurt.user_id as u32);
+        //         let Some(uid) = self.user_entities.get(&entity_id) else {
+        //             error!("Unknown entity id {entity_id} in capture blocked event");
+        //             return;
+        //         };
+        let uid = UserId::from(hurt.user_id);
+        let Some(summary) = self.state.player_summaries.get_mut(&uid) else {
+            error!("Unknown victim uid {uid} in player hurt event");
+            return;
+        };
+
+        summary.damage_taken += hurt.damage_amount as u32;
+
+        //         let entity_id = EntityId::from(hurt.attacker as u32);
+        //         let Some(uid) = self.user_entities.get(&entity_id) else {
+        //             error!("Unknown entity id {entity_id} in capture blocked event");
+        //             return;
+        //         };
+
+        let uid = UserId::from(hurt.user_id);
+        let Some(summary) = self.state.player_summaries.get_mut(&uid) else {
+            error!("Unknown attacker uid {uid} in player hurt event");
+            return;
+        };
+
+        summary.damage += hurt.damage_amount as u32;
+
+        match DamageType::try_from(hurt.custom) {
+            // TODO: Only count kills?
+            Ok(DamageType::Backstab) => summary.backstabs += 1,
+            Ok(DamageType::Headshot) => summary.headshots += 1,
+
+            Err(_) => error!("Unknown damage type: {}", hurt.custom),
+            _ => {}
+        }
+
+        // 				match damage_type
+        //         if damage_type
+        //             summary.headshots += 1;
+        //         }
+        // 				if summary.headshots {
+        //             summary.headshots += 1;
+        //         }
+    }
 }
 
 impl MessageHandler for MatchAnalyzer {
@@ -532,6 +612,9 @@ impl MessageHandler for MatchAnalyzer {
                     trace!("PlayerShoot");
                 }
                 GameEvent::PlayerDeath(death) => self.handle_player_death(death),
+                GameEvent::PlayerHurt(hurt) => self.handle_player_hurt(hurt),
+                GameEvent::TeamPlayPointCaptured(cap) => self.handle_point_captures(cap),
+                GameEvent::TeamPlayCaptureBlocked(block) => self.handle_capture_blocked(block),
                 GameEvent::RoundStart(_) => {
                     trace!("round start");
                     // self.state.buildings.clear();
