@@ -4,23 +4,31 @@ use crate::parser::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use tf_demo_parser::demo::gamevent::GameEvent;
-use tf_demo_parser::demo::message::gameevent::GameEventMessage;
-use tf_demo_parser::demo::message::packetentities::{EntityId, PacketEntity};
-use tf_demo_parser::demo::message::Message;
-use tf_demo_parser::demo::packet::datatable::{ClassId, ParseSendTable, ServerClass};
-use tf_demo_parser::demo::packet::stringtable::StringTableEntry;
-use tf_demo_parser::demo::parser::gamestateanalyser::{Class, Team, UserId};
-use tf_demo_parser::demo::parser::MessageHandler;
-use tf_demo_parser::demo::{
-    data::{DemoTick, ServerTick, UserInfo},
-    gameevent_gen::{
-        ObjectDestroyedEvent, PlayerDeathEvent, PlayerHurtEvent, TeamPlayCaptureBlockedEvent,
-        TeamPlayPointCapturedEvent,
+use tf_demo_parser::{
+    demo::{
+        data::{DemoTick, ServerTick, UserInfo},
+        gameevent_gen::{
+            ObjectDestroyedEvent, PlayerDeathEvent, PlayerHurtEvent, TeamPlayCaptureBlockedEvent,
+            TeamPlayPointCapturedEvent,
+        },
+        gamevent::GameEvent,
+        message::{
+            gameevent::GameEventMessage,
+            packetentities::{EntityId, PacketEntity},
+            Message,
+        },
+        packet::{
+            datatable::{ClassId, ParseSendTable, ServerClass},
+            stringtable::StringTableEntry,
+        },
+        parser::{
+            gamestateanalyser::{Class, Team, UserId},
+            MessageHandler,
+        },
+        sendprop::{SendPropIdentifier, SendPropValue},
     },
-    sendprop::{SendPropIdentifier, SendPropValue},
+    MessageType, ParserState, ReadResult, Stream,
 };
-use tf_demo_parser::{MessageType, ParserState, ReadResult, Stream};
 use tracing::{debug, error, error_span, span::EnteredSpan, trace};
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
