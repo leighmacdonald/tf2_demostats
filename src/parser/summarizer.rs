@@ -47,15 +47,13 @@ pub struct DemoSummary {
     pub player_summaries: HashMap<UserId, PlayerSummary>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Default)]
 pub struct MatchAnalyzer {
     state: DemoSummary,
     user_entities: HashMap<EntityId, UserId>,
     users: BTreeMap<UserId, PlayerMeta>,
     waiting_for_players: bool,
     round_state: RoundState,
-    user_id_map: HashMap<EntityId, u32>,
-    #[serde(skip)]
     span: Option<EnteredSpan>,
     tick: DemoTick,
     server_tick: ServerTick,
