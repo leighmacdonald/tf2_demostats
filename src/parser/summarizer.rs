@@ -1,10 +1,9 @@
 use crate::parser::{
-    game::RoundState,
+    game::{RoundState, DEATH_FEIGNED, ENTITY_IN_WATER, ENTITY_ON_GROUND},
     weapon::{Weapon, WeaponDetail},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use tf_demo_parser::demo::gameevent_gen::ObjectDestroyedEvent;
 use tf_demo_parser::demo::gamevent::GameEvent;
 use tf_demo_parser::demo::message::gameevent::GameEventMessage;
 use tf_demo_parser::demo::message::packetentities::{EntityId, PacketEntity};
@@ -15,12 +14,13 @@ use tf_demo_parser::demo::parser::gamestateanalyser::UserId;
 use tf_demo_parser::demo::parser::gamestateanalyser::{Class, Team};
 use tf_demo_parser::demo::parser::MessageHandler;
 use tf_demo_parser::demo::sendprop::{SendPropIdentifier, SendPropValue};
+use tf_demo_parser::demo::{data::ServerTick, gameevent_gen::ObjectDestroyedEvent};
 use tf_demo_parser::demo::{
     data::{DemoTick, UserInfo},
     gameevent_gen::PlayerDeathEvent,
 };
 use tf_demo_parser::{MessageType, ParserState, ReadResult, Stream};
-use tracing::{error, info_span, span::EnteredSpan, trace};
+use tracing::{debug, error, info_span, span::EnteredSpan, trace};
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlayerMeta {
@@ -54,6 +54,8 @@ pub struct MatchAnalyzer {
     user_id_map: HashMap<EntityId, u32>,
     #[serde(skip)]
     span: Option<EnteredSpan>,
+    tick: DemoTick,
+    server_tick: ServerTick,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -103,22 +105,22 @@ pub struct PlayerSummary {
     pub team: Team,
     pub time_start: u32, // ticks instead?
     pub time_end: u32,
-    pub points: u32,
+    pub points: Option<u32>,
     pub connection_count: u32,
-    pub bonus_points: u32,
+    pub bonus_points: Option<u32>,
 
     pub kills: u32,
-    pub scoreboard_kills: u32,
+    pub scoreboard_kills: Option<u32>,
     pub postround_kills: u32,
 
     pub assists: u32,
-    pub scoreboard_assists: u32, // Only present in PoV demos
+    pub scoreboard_assists: Option<u32>, // Only present in PoV demos
     pub postround_assists: u32,
 
     pub suicides: u32,
 
     pub deaths: u32,
-    pub scoreboard_deaths: u32,
+    pub scoreboard_deaths: Option<u32>,
     pub postround_deaths: u32,
 
     // TODO
@@ -152,6 +154,20 @@ pub struct PlayerSummary {
     pub classes: HashMap<ClassId, PlayerClass>,
     pub killstreaks: Vec<Killstreak>,
     pub weapons: HashMap<Weapon, WeaponDetail>,
+
+    // Flags for internal state tracking but unused elsewhere
+    #[serde(skip)]
+    on_ground: bool,
+    #[serde(skip)]
+    in_water: bool,
+    #[serde(skip)]
+    started_flying: DemoTick,
+}
+
+impl PlayerSummary {
+    fn in_air(&self) -> bool {
+        !self.on_ground && !self.in_water
+    }
 }
 
 impl MatchAnalyzer {
@@ -168,7 +184,7 @@ impl MatchAnalyzer {
         if let Some(user_info) = UserInfo::parse_from_string_table(index as u16, text, data)? {
             let entity_id = user_info.entity_id;
             let id = user_info.player_info.user_id;
-            trace!("user info {} {id} {entity_id}", user_info.player_info.name);
+            debug!("user info {} {id} {entity_id}", user_info.player_info.name);
 
             let new_user_info = user_info.clone();
             self.users
@@ -239,7 +255,10 @@ impl MatchAnalyzer {
         const KILL_ASSISTS: SendPropIdentifier =
             SendPropIdentifier::new("DT_TFPlayerScoringDataExclusive", "m_iKillAssists");
 
-        let entity_id = &EntityId::from(entity.entity_index);
+        // Props that always are available
+        const FLAGS: SendPropIdentifier = SendPropIdentifier::new("DT_BasePlayer", "m_fFlags");
+
+        let entity_id = &entity.entity_index;
         let Some(user_id) = self.user_entities.get(entity_id) else {
             error!("Unknown player entity id: {}", entity_id);
             return;
@@ -257,18 +276,33 @@ impl MatchAnalyzer {
             };
 
             match prop.identifier {
+                FLAGS => {
+                    let was_in_air = summary.in_air();
+
+                    summary.on_ground = (val as u16) & ENTITY_ON_GROUND != 0;
+                    summary.in_water = (val as u16) & ENTITY_IN_WATER != 0;
+
+                    let now_in_air = summary.in_air();
+
+                    if !was_in_air && now_in_air {
+                        summary.started_flying = self.tick;
+                    }
+                }
+
                 KILLS => {
-                    summary.scoreboard_kills = val as u32;
+                    summary.scoreboard_kills = Some(val as u32);
                 }
                 KILL_ASSISTS => {
                     // PoV demos include multiple different copies of
                     // this field -- maybe per round stats? We want
                     // the larger one.
-                    summary.scoreboard_assists = summary.scoreboard_assists.max(val as u32);
+                    summary.scoreboard_assists =
+                        Some(summary.scoreboard_assists.unwrap_or(0).max(val as u32));
                 }
                 DEATHS => {
-                    summary.scoreboard_deaths = val as u32;
+                    summary.scoreboard_deaths = Some(val as u32);
                 }
+
                 _ => {}
             }
         }
@@ -292,7 +326,7 @@ impl MatchAnalyzer {
                             }
                             "m_iTotalScore" => {
                                 player.points =
-                                    i64::try_from(&prop.value).unwrap_or_default() as u32
+                                    Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
                             }
                             "m_iDamage" => {
                                 player.damage_dealt =
@@ -300,16 +334,16 @@ impl MatchAnalyzer {
                             }
                             "m_iDeaths" => {
                                 player.scoreboard_deaths =
-                                    i64::try_from(&prop.value).unwrap_or_default() as u32
+                                    Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
                             }
                             "m_iScore" => {
                                 // iScore is close to number of kills; but counts post-game kills and decrements on suicide.
                                 player.scoreboard_kills =
-                                    i64::try_from(&prop.value).unwrap_or_default() as u32
+                                    Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
                             }
                             "m_iBonusPoints" => {
                                 player.bonus_points =
-                                    i64::try_from(&prop.value).unwrap_or_default() as u32
+                                    Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
                             }
                             "m_iPlayerClass" => {}
                             "m_iPlayerLevel" => {}
@@ -371,15 +405,14 @@ impl MatchAnalyzer {
     }
 
     pub fn handle_player_death(&mut self, death: &PlayerDeathEvent) {
-        trace!(
+        debug!(
             "PlayerDeath {death:?} {} {:?}",
-            self.waiting_for_players,
-            self.round_state
+            self.waiting_for_players, self.round_state
         );
         if self.waiting_for_players {
             return;
         }
-        let feigned = death.death_flags & 0x0020 != 0;
+        let feigned = death.death_flags & DEATH_FEIGNED != 0;
 
         if death.user_id == death.attacker {
             let Some(suicider) = self
@@ -410,6 +443,9 @@ impl MatchAnalyzer {
             }
         }
 
+        // TODO: Tune this definition. Suppstats uses "distance from ground" but that doesn't seem much better.
+        let airshot = victim.in_air() && (self.tick - victim.started_flying > 16);
+
         let attacker_is_world = death.attacker == 0;
         let attacker = self
             .state
@@ -421,6 +457,12 @@ impl MatchAnalyzer {
                     attacker.postround_kills += 1;
                 } else {
                     attacker.kills += 1;
+
+                    // TODO: Should we track these for
+                    if airshot {
+                        attacker.airshots += 1;
+                        debug!("airshot by {}!", attacker.name);
+                    }
                 }
             }
         } else if !attacker_is_world {
@@ -446,7 +488,6 @@ impl MatchAnalyzer {
             }
         } else {
             error!("Unknown assister id: {}", death.assister);
-            return;
         }
     }
 }
@@ -462,8 +503,11 @@ impl MessageHandler for MatchAnalyzer {
     }
 
     fn handle_message(&mut self, message: &Message, tick: DemoTick, parser_state: &ParserState) {
+        self.tick = tick;
         match message {
             Message::NetTick(t) => {
+                self.server_tick = t.tick;
+
                 // Must explicitly drop the old span to avoid creating
                 // a cycle where the new span points to the old span.
                 self.span = None;
