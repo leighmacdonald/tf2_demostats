@@ -26,6 +26,7 @@ use tf_demo_parser::{
             MessageHandler,
         },
         sendprop::{SendPropIdentifier, SendPropValue},
+        vector::{Vector, VectorXY},
     },
     MessageType, ParserState, ReadResult, Stream,
 };
@@ -171,6 +172,14 @@ pub struct PlayerSummary {
     started_flying: DemoTick,
     #[serde(skip)]
     class: Class,
+    #[serde(skip)]
+    health: u32,
+    #[serde(skip)]
+    sim_time: u32,
+    #[serde(skip)]
+    origin: Vector,
+    #[serde(skip)]
+    eye: VectorXY,
 }
 
 impl PlayerSummary {
@@ -266,8 +275,21 @@ impl MatchAnalyzer {
 
         // Props that always are available
         const FLAGS: SendPropIdentifier = SendPropIdentifier::new("DT_BasePlayer", "m_fFlags");
+        const HEALTH: SendPropIdentifier = SendPropIdentifier::new("DT_BasePlayer", "m_iHealth");
         const CLASS: SendPropIdentifier =
             SendPropIdentifier::new("DT_TFPlayerClassShared", "m_iClass");
+        const SIM_TIME: SendPropIdentifier =
+            SendPropIdentifier::new("DT_BaseEntity", "m_flSimulationTime");
+
+        const ORIGIN_XY: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_vecOrigin");
+        const ORIGIN_Z: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_vecOrigin[2]");
+
+        const EYE_X: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_angEyeAngles[0]");
+        const EYE_Y: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_angEyeAngles[1]");
 
         let entity_id = &entity.entity_index;
         let Some(user_id) = self.user_entities.get(entity_id) else {
@@ -315,6 +337,24 @@ impl MatchAnalyzer {
                     };
                     summary.class = class;
                 }
+                (HEALTH, SendPropValue::Integer(val)) => {
+                    summary.health = *val as u32;
+                }
+                (SIM_TIME, SendPropValue::Integer(val)) => {
+                    summary.sim_time = *val as u32;
+                }
+
+                (ORIGIN_XY, SendPropValue::VectorXY(vec)) => {
+                    summary.origin.x = vec.x;
+                    summary.origin.y = vec.y;
+                }
+                (ORIGIN_Z, SendPropValue::Float(z)) => {
+                    summary.origin.z = *z;
+                }
+
+                (EYE_X, SendPropValue::Float(x)) => summary.eye.x = *x,
+                (EYE_Y, SendPropValue::Float(y)) => summary.eye.y = *y,
+
                 _ => {
                     trace!("Unhandled player ({}) entity prop {prop:?}", summary.name);
                 }
