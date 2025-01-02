@@ -618,7 +618,10 @@ impl MessageHandler for MatchAnalyzer {
     fn does_handle(message_type: MessageType) -> bool {
         matches!(
             message_type,
-            MessageType::PacketEntities | MessageType::GameEvent | MessageType::NetTick
+            MessageType::PacketEntities
+                | MessageType::GameEvent
+                | MessageType::NetTick
+                | MessageType::TempEntities
         )
     }
 
@@ -644,6 +647,30 @@ impl MessageHandler for MatchAnalyzer {
             Message::PacketEntities(message) => {
                 for entity in message.entities.iter() {
                     self.handle_packet_entity(entity, parser_state);
+                }
+            }
+            Message::TempEntities(te) => {
+                for e in &te.events {
+                    match u16::from(e.class_id) {
+                        // 												165 => self.handle_temp_anim_entity(e),
+                        // 												152 => self.handle_temp_fire_bullets_entity(e),
+                        // 												177 => self.handle_temp_blood_entity(e),
+                        // 												149 => self.handle_temp_effect_data_entity(e),
+                        // 												179 => self.handle_temp_particle_effect_entity(e),
+                        129 => {} // metal sparks
+                        178 => {} // explosion
+                        147 => {} // Dust particle
+                        161 => {} // Metal sparks particle
+                        171 => {} // Smoke
+                        172 => {} // Spark particle
+                        146 => {} // decal
+                        166 => {} // player decal
+                        180 => {} // world decal
+
+                        _ => {
+                            debug!("Unknown temp entity: {:?}", e);
+                        }
+                    }
                 }
             }
             Message::GameEvent(GameEventMessage { event, .. }) => match event {
