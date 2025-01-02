@@ -558,7 +558,9 @@ impl MatchAnalyzer {
         }
     }
 
-    pub fn handle_point_captures(&mut self, cap: &TeamPlayPointCapturedEvent) {
+    pub fn handle_point_captured(&mut self, cap: &TeamPlayPointCapturedEvent) {
+        trace!("Point Captures {:?}", cap);
+
         for entity_id in cap.cappers.as_bytes() {
             let Some(uid) = self.user_entities.get(&EntityId::from(*entity_id as u32)) else {
                 error!("Unknown entity id {entity_id} in capture event");
@@ -575,6 +577,8 @@ impl MatchAnalyzer {
     }
 
     pub fn handle_capture_blocked(&mut self, cap: &TeamPlayCaptureBlockedEvent) {
+        trace!("Capture blocked {:?}", cap);
+
         let entity_id = EntityId::from(cap.blocker as u32);
         let Some(uid) = self.user_entities.get(&entity_id) else {
             error!("Unknown entity id {entity_id} in capture blocked event");
@@ -646,24 +650,33 @@ impl MessageHandler for MatchAnalyzer {
             }
             Message::GameEvent(GameEventMessage { event, .. }) => match event {
                 GameEvent::PlayerShoot(_) => {
-                    trace!("PlayerShoot");
+                    debug!("PlayerShoot");
                 }
                 GameEvent::PlayerDeath(death) => self.handle_player_death(death),
                 GameEvent::PlayerHurt(hurt) => self.handle_player_hurt(hurt),
-                GameEvent::TeamPlayPointCaptured(cap) => self.handle_point_captures(cap),
+                GameEvent::TeamPlayPointCaptured(cap) => self.handle_point_captured(cap),
                 GameEvent::TeamPlayCaptureBlocked(block) => self.handle_capture_blocked(block),
                 GameEvent::RoundStart(_) => {
-                    trace!("round start");
+                    debug!("round start");
                     // self.state.buildings.clear();
                 }
                 GameEvent::TeamPlayRoundStart(_e) => {
-                    trace!("TeamPlayRoundStart");
+                    debug!("TeamPlayRoundStart");
                     //self.state.buildings.clear();
                 }
                 GameEvent::ObjectDestroyed(ObjectDestroyedEvent { index: _, .. }) => {
-                    //println!("ObjectDestroyed");
+                    debug!("ObjectDestroyed");
                     //self.state.remove_building((*index as u32).into());
                 }
+
+                // Some STVs demos don't have these events; they are
+                // present in PoV demos and some STV demos (possibly
+                // based on server side plugins?)
+                GameEvent::PlayerDisconnect(d) => debug!("PlayerDisconnect {d:?}"),
+                GameEvent::PlayerHealed(heal) => debug!("PlayerHealed {heal:?}"),
+                GameEvent::PlayerInvulned(invuln) => debug!("PlayerDisconnect {invuln:?}"),
+                GameEvent::PlayerChargeDeployed(c) => debug!("PlayerChargeDeployed {c:?}"),
+
                 _ => {
                     trace!("Unhandled game event: {event:?}");
                     let event_string = format!("{:?}", event);
