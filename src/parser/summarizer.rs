@@ -159,10 +159,8 @@ pub struct PlayerSummary {
     pub teleports: u32,
     pub backstabs: u32,
     pub support: u32,
-    pub damage_dealt: u32,
 
     pub healing: HealersSummary,
-    //pub bonus_points: u32,
     //pub support: u32,
     pub classes: HashMap<ClassId, PlayerClass>,
     pub killstreaks: Vec<Killstreak>,
