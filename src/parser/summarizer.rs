@@ -629,9 +629,8 @@ impl MessageHandler for MatchAnalyzer {
                 self.span = Some(
                     error_span!(
                         "Tick",
-                        "Tick={},ServerTick={}",
-                        (u32::from(tick)),
-                        (u32::from(t.tick))
+                        tick = u32::from(tick),
+                        server_tick = u32::from(t.tick)
                     )
                     .entered(),
                 );
