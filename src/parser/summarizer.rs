@@ -49,7 +49,7 @@ pub struct PlayerMeta {
     // pub more_extra: u8,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct DemoSummary {
     pub player_summaries: HashMap<UserId, PlayerSummary>,
 }
@@ -105,7 +105,7 @@ pub struct HealersSummary {
     pub biggest_adv_lost: u32,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct PlayerSummary {
     pub name: String,
     pub steamid: String,
