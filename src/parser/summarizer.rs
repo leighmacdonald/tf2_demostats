@@ -134,19 +134,24 @@ pub struct PlayerSummary {
     pub captures: u32,
     pub captures_blocked: u32,
 
+    // Kills where the victim was in the air for a decent amount of time.
+    // TOOD: clarify this definition
+    pub airshots: u32,
+
+    pub damage: u32, // Added up PlayerHurt events
+    pub scoreboard_damage: Option<u32>,
+    pub damage_taken: u32,
+
     // TODO
     pub dominations: u32,
     pub dominated: u32,
     pub revenges: u32,
-    pub damage: u32,
-    pub damage_taken: u32,
     pub healing_taken: u32,
     pub health_packs: u32,
     pub healing_packs: u32, // total healing from packs
     pub extinguishes: u32,
     pub building_built: u32,
     pub buildings_destroyed: u32,
-    pub airshots: u32,
     pub ubercharges: u32,
     pub headshots: u32,
     pub shots: u32,
@@ -383,8 +388,8 @@ impl MatchAnalyzer {
                                     Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
                             }
                             "m_iDamage" => {
-                                player.damage_dealt =
-                                    i64::try_from(&prop.value).unwrap_or_default() as u32
+                                player.scoreboard_damage =
+                                    Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
                             }
                             "m_iDeaths" => {
                                 player.scoreboard_deaths =
@@ -517,6 +522,14 @@ impl MatchAnalyzer {
                         attacker.airshots += 1;
                         debug!("airshot by {}!", attacker.name);
                     }
+
+                    match DamageType::try_from(death.custom_kill) {
+                        Ok(DamageType::Backstab) => attacker.backstabs += 1,
+                        Ok(DamageType::Headshot) => attacker.headshots += 1,
+
+                        Err(_) => error!("Unknown kill damage type: {}", death.custom_kill),
+                        _ => {}
+                    }
                 }
             }
         } else if !attacker_is_world {
@@ -594,15 +607,6 @@ impl MatchAnalyzer {
         };
 
         summary.damage += hurt.damage_amount as u32;
-
-        match DamageType::try_from(hurt.custom) {
-            // TODO: Only count kills?
-            Ok(DamageType::Backstab) => summary.backstabs += 1,
-            Ok(DamageType::Headshot) => summary.headshots += 1,
-
-            Err(_) => error!("Unknown damage type: {}", hurt.custom),
-            _ => {}
-        }
     }
 }
 
