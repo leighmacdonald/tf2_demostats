@@ -1,26 +1,36 @@
 use crate::parser::{
-    game::{RoundState, DEATH_FEIGNED, ENTITY_IN_WATER, ENTITY_ON_GROUND},
+    game::{DamageType, RoundState, DEATH_FEIGNED, ENTITY_IN_WATER, ENTITY_ON_GROUND},
     weapon::{Weapon, WeaponDetail},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use tf_demo_parser::demo::gamevent::GameEvent;
-use tf_demo_parser::demo::message::gameevent::GameEventMessage;
-use tf_demo_parser::demo::message::packetentities::{EntityId, PacketEntity};
-use tf_demo_parser::demo::message::Message;
-use tf_demo_parser::demo::packet::datatable::{ClassId, ParseSendTable, ServerClass};
-use tf_demo_parser::demo::packet::stringtable::StringTableEntry;
-use tf_demo_parser::demo::parser::gamestateanalyser::UserId;
-use tf_demo_parser::demo::parser::gamestateanalyser::{Class, Team};
-use tf_demo_parser::demo::parser::MessageHandler;
-use tf_demo_parser::demo::sendprop::{SendPropIdentifier, SendPropValue};
-use tf_demo_parser::demo::{data::ServerTick, gameevent_gen::ObjectDestroyedEvent};
-use tf_demo_parser::demo::{
-    data::{DemoTick, UserInfo},
-    gameevent_gen::PlayerDeathEvent,
+use tf_demo_parser::{
+    demo::{
+        data::{DemoTick, ServerTick, UserInfo},
+        gameevent_gen::{
+            ObjectDestroyedEvent, PlayerDeathEvent, PlayerHurtEvent, TeamPlayCaptureBlockedEvent,
+            TeamPlayPointCapturedEvent,
+        },
+        gamevent::GameEvent,
+        message::{
+            gameevent::GameEventMessage,
+            packetentities::{EntityId, PacketEntity},
+            Message,
+        },
+        packet::{
+            datatable::{ClassId, ParseSendTable, ServerClass},
+            stringtable::StringTableEntry,
+        },
+        parser::{
+            gamestateanalyser::{Class, Team, UserId},
+            MessageHandler,
+        },
+        sendprop::{SendPropIdentifier, SendPropValue},
+        vector::{Vector, VectorXY},
+    },
+    MessageType, ParserState, ReadResult, Stream,
 };
-use tf_demo_parser::{MessageType, ParserState, ReadResult, Stream};
-use tracing::{debug, error, info_span, span::EnteredSpan, trace};
+use tracing::{debug, error, error_span, span::EnteredSpan, trace};
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlayerMeta {
@@ -39,20 +49,18 @@ pub struct PlayerMeta {
     // pub more_extra: u8,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct DemoSummary {
     pub player_summaries: HashMap<UserId, PlayerSummary>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Default)]
 pub struct MatchAnalyzer {
     state: DemoSummary,
     user_entities: HashMap<EntityId, UserId>,
     users: BTreeMap<UserId, PlayerMeta>,
     waiting_for_players: bool,
     round_state: RoundState,
-    user_id_map: HashMap<EntityId, u32>,
-    #[serde(skip)]
     span: Option<EnteredSpan>,
     tick: DemoTick,
     server_tick: ServerTick,
@@ -97,7 +105,7 @@ pub struct HealersSummary {
     pub biggest_adv_lost: u32,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct PlayerSummary {
     pub name: String,
     pub steamid: String,
@@ -123,22 +131,27 @@ pub struct PlayerSummary {
     pub scoreboard_deaths: Option<u32>,
     pub postround_deaths: u32,
 
+    pub captures: u32,
+    pub captures_blocked: u32,
+
+    // Kills where the victim was in the air for a decent amount of time.
+    // TOOD: clarify this definition
+    pub airshots: u32,
+
+    pub damage: u32, // Added up PlayerHurt events
+    pub scoreboard_damage: Option<u32>,
+    pub damage_taken: u32,
+
     // TODO
-    pub defenses: u32,
     pub dominations: u32,
     pub dominated: u32,
     pub revenges: u32,
-    pub damage: u32,
-    pub damage_taken: u32,
     pub healing_taken: u32,
     pub health_packs: u32,
     pub healing_packs: u32, // total healing from packs
-    pub captures: u32,
-    pub captures_blocked: u32,
     pub extinguishes: u32,
     pub building_built: u32,
     pub buildings_destroyed: u32,
-    pub airshots: u32,
     pub ubercharges: u32,
     pub headshots: u32,
     pub shots: u32,
@@ -146,10 +159,8 @@ pub struct PlayerSummary {
     pub teleports: u32,
     pub backstabs: u32,
     pub support: u32,
-    pub damage_dealt: u32,
 
     pub healing: HealersSummary,
-    //pub bonus_points: u32,
     //pub support: u32,
     pub classes: HashMap<ClassId, PlayerClass>,
     pub killstreaks: Vec<Killstreak>,
@@ -162,6 +173,16 @@ pub struct PlayerSummary {
     in_water: bool,
     #[serde(skip)]
     started_flying: DemoTick,
+    #[serde(skip)]
+    class: Class,
+    #[serde(skip)]
+    health: u32,
+    #[serde(skip)]
+    sim_time: u32,
+    #[serde(skip)]
+    origin: Vector,
+    #[serde(skip)]
+    eye: VectorXY,
 }
 
 impl PlayerSummary {
@@ -257,10 +278,25 @@ impl MatchAnalyzer {
 
         // Props that always are available
         const FLAGS: SendPropIdentifier = SendPropIdentifier::new("DT_BasePlayer", "m_fFlags");
+        const HEALTH: SendPropIdentifier = SendPropIdentifier::new("DT_BasePlayer", "m_iHealth");
+        const CLASS: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFPlayerClassShared", "m_iClass");
+        const SIM_TIME: SendPropIdentifier =
+            SendPropIdentifier::new("DT_BaseEntity", "m_flSimulationTime");
+
+        const ORIGIN_XY: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_vecOrigin");
+        const ORIGIN_Z: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_vecOrigin[2]");
+
+        const EYE_X: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_angEyeAngles[0]");
+        const EYE_Y: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_angEyeAngles[1]");
 
         let entity_id = &entity.entity_index;
         let Some(user_id) = self.user_entities.get(entity_id) else {
-            error!("Unknown player entity id: {}", entity_id);
+            error!("Unknown player entity id: {entity_id}");
             return;
         };
 
@@ -270,17 +306,26 @@ impl MatchAnalyzer {
         };
 
         for prop in &entity.props {
-            trace!("Player entity {} {prop:?}", summary.name);
-            let SendPropValue::Integer(val) = prop.value else {
-                continue;
-            };
-
-            match prop.identifier {
-                FLAGS => {
+            match (prop.identifier, &prop.value) {
+                (KILLS, SendPropValue::Integer(val)) => {
+                    summary.scoreboard_kills = Some(*val as u32);
+                }
+                (KILL_ASSISTS, SendPropValue::Integer(val)) => {
+                    // PoV demos include multiple different copies of
+                    // this field -- maybe per round stats? We want
+                    // the larger one.
+                    summary.scoreboard_assists =
+                        Some(summary.scoreboard_assists.unwrap_or(0).max(*val as u32));
+                }
+                (DEATHS, SendPropValue::Integer(val)) => {
+                    summary.scoreboard_deaths = Some(*val as u32);
+                }
+                (FLAGS, SendPropValue::Integer(val)) => {
                     let was_in_air = summary.in_air();
 
-                    summary.on_ground = (val as u16) & ENTITY_ON_GROUND != 0;
-                    summary.in_water = (val as u16) & ENTITY_IN_WATER != 0;
+                    let flags = *val as u16;
+                    summary.on_ground = flags & ENTITY_ON_GROUND != 0;
+                    summary.in_water = flags & ENTITY_IN_WATER != 0;
 
                     let now_in_air = summary.in_air();
 
@@ -288,22 +333,34 @@ impl MatchAnalyzer {
                         summary.started_flying = self.tick;
                     }
                 }
+                (CLASS, SendPropValue::Integer(val)) => {
+                    let Ok(class) = Class::try_from(*val as u8) else {
+                        error!("Unknown classid {val}");
+                        continue;
+                    };
+                    summary.class = class;
+                }
+                (HEALTH, SendPropValue::Integer(val)) => {
+                    summary.health = *val as u32;
+                }
+                (SIM_TIME, SendPropValue::Integer(val)) => {
+                    summary.sim_time = *val as u32;
+                }
 
-                KILLS => {
-                    summary.scoreboard_kills = Some(val as u32);
+                (ORIGIN_XY, SendPropValue::VectorXY(vec)) => {
+                    summary.origin.x = vec.x;
+                    summary.origin.y = vec.y;
                 }
-                KILL_ASSISTS => {
-                    // PoV demos include multiple different copies of
-                    // this field -- maybe per round stats? We want
-                    // the larger one.
-                    summary.scoreboard_assists =
-                        Some(summary.scoreboard_assists.unwrap_or(0).max(val as u32));
-                }
-                DEATHS => {
-                    summary.scoreboard_deaths = Some(val as u32);
+                (ORIGIN_Z, SendPropValue::Float(z)) => {
+                    summary.origin.z = *z;
                 }
 
-                _ => {}
+                (EYE_X, SendPropValue::Float(x)) => summary.eye.x = *x,
+                (EYE_Y, SendPropValue::Float(y)) => summary.eye.y = *y,
+
+                _ => {
+                    trace!("Unhandled player ({}) entity prop {prop:?}", summary.name);
+                }
             }
         }
     }
@@ -329,8 +386,8 @@ impl MatchAnalyzer {
                                     Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
                             }
                             "m_iDamage" => {
-                                player.damage_dealt =
-                                    i64::try_from(&prop.value).unwrap_or_default() as u32
+                                player.scoreboard_damage =
+                                    Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
                             }
                             "m_iDeaths" => {
                                 player.scoreboard_deaths =
@@ -463,6 +520,14 @@ impl MatchAnalyzer {
                         attacker.airshots += 1;
                         debug!("airshot by {}!", attacker.name);
                     }
+
+                    match DamageType::try_from(death.custom_kill) {
+                        Ok(DamageType::Backstab) => attacker.backstabs += 1,
+                        Ok(DamageType::Headshot) => attacker.headshots += 1,
+
+                        Err(_) => error!("Unknown kill damage type: {}", death.custom_kill),
+                        _ => {}
+                    }
                 }
             }
         } else if !attacker_is_world {
@@ -490,6 +555,61 @@ impl MatchAnalyzer {
             error!("Unknown assister id: {}", death.assister);
         }
     }
+
+    pub fn handle_point_captured(&mut self, cap: &TeamPlayPointCapturedEvent) {
+        trace!("Point Captures {:?}", cap);
+
+        for entity_id in cap.cappers.as_bytes() {
+            let Some(uid) = self.user_entities.get(&EntityId::from(*entity_id as u32)) else {
+                error!("Unknown entity id {entity_id} in capture event");
+                continue;
+            };
+
+            let Some(summary) = self.state.player_summaries.get_mut(uid) else {
+                error!("Unknown uid {uid} from entity id {entity_id} in capture event");
+                continue;
+            };
+            debug!("Capture by {}", summary.name);
+            summary.captures += 1;
+        }
+    }
+
+    pub fn handle_capture_blocked(&mut self, cap: &TeamPlayCaptureBlockedEvent) {
+        trace!("Capture blocked {:?}", cap);
+
+        let entity_id = EntityId::from(cap.blocker as u32);
+        let Some(uid) = self.user_entities.get(&entity_id) else {
+            error!("Unknown entity id {entity_id} in capture blocked event");
+            return;
+        };
+
+        let Some(summary) = self.state.player_summaries.get_mut(uid) else {
+            error!("Unknown uid {uid} from entity id {entity_id} in capture blocked event");
+            return;
+        };
+
+        summary.captures_blocked += 1;
+    }
+
+    pub fn handle_player_hurt(&mut self, hurt: &PlayerHurtEvent) {
+        trace!("Player hurt {:?}", hurt);
+
+        let uid = UserId::from(hurt.user_id);
+        let Some(summary) = self.state.player_summaries.get_mut(&uid) else {
+            error!("Unknown victim uid {uid} in player hurt event");
+            return;
+        };
+
+        summary.damage_taken += hurt.damage_amount as u32;
+
+        let uid = UserId::from(hurt.user_id);
+        let Some(summary) = self.state.player_summaries.get_mut(&uid) else {
+            error!("Unknown attacker uid {uid} in player hurt event");
+            return;
+        };
+
+        summary.damage += hurt.damage_amount as u32;
+    }
 }
 
 impl MessageHandler for MatchAnalyzer {
@@ -498,7 +618,10 @@ impl MessageHandler for MatchAnalyzer {
     fn does_handle(message_type: MessageType) -> bool {
         matches!(
             message_type,
-            MessageType::PacketEntities | MessageType::GameEvent | MessageType::NetTick
+            MessageType::PacketEntities
+                | MessageType::GameEvent
+                | MessageType::NetTick
+                | MessageType::TempEntities
         )
     }
 
@@ -513,11 +636,10 @@ impl MessageHandler for MatchAnalyzer {
                 self.span = None;
 
                 self.span = Some(
-                    info_span!(
+                    error_span!(
                         "Tick",
-                        "Tick={},ServerTick={}",
-                        (u32::from(tick)),
-                        (u32::from(t.tick))
+                        tick = u32::from(tick),
+                        server_tick = u32::from(t.tick)
                     )
                     .entered(),
                 );
@@ -527,23 +649,59 @@ impl MessageHandler for MatchAnalyzer {
                     self.handle_packet_entity(entity, parser_state);
                 }
             }
+            Message::TempEntities(te) => {
+                for e in &te.events {
+                    match u16::from(e.class_id) {
+                        // 												165 => self.handle_temp_anim_entity(e),
+                        // 												152 => self.handle_temp_fire_bullets_entity(e),
+                        // 												177 => self.handle_temp_blood_entity(e),
+                        // 												149 => self.handle_temp_effect_data_entity(e),
+                        // 												179 => self.handle_temp_particle_effect_entity(e),
+                        129 => {} // metal sparks
+                        178 => {} // explosion
+                        147 => {} // Dust particle
+                        161 => {} // Metal sparks particle
+                        171 => {} // Smoke
+                        172 => {} // Spark particle
+                        146 => {} // decal
+                        166 => {} // player decal
+                        180 => {} // world decal
+
+                        _ => {
+                            debug!("Unknown temp entity: {:?}", e);
+                        }
+                    }
+                }
+            }
             Message::GameEvent(GameEventMessage { event, .. }) => match event {
                 GameEvent::PlayerShoot(_) => {
-                    trace!("PlayerShoot");
+                    debug!("PlayerShoot");
                 }
                 GameEvent::PlayerDeath(death) => self.handle_player_death(death),
+                GameEvent::PlayerHurt(hurt) => self.handle_player_hurt(hurt),
+                GameEvent::TeamPlayPointCaptured(cap) => self.handle_point_captured(cap),
+                GameEvent::TeamPlayCaptureBlocked(block) => self.handle_capture_blocked(block),
                 GameEvent::RoundStart(_) => {
-                    trace!("round start");
+                    debug!("round start");
                     // self.state.buildings.clear();
                 }
                 GameEvent::TeamPlayRoundStart(_e) => {
-                    trace!("TeamPlayRoundStart");
+                    debug!("TeamPlayRoundStart");
                     //self.state.buildings.clear();
                 }
                 GameEvent::ObjectDestroyed(ObjectDestroyedEvent { index: _, .. }) => {
-                    //println!("ObjectDestroyed");
+                    debug!("ObjectDestroyed");
                     //self.state.remove_building((*index as u32).into());
                 }
+
+                // Some STVs demos don't have these events; they are
+                // present in PoV demos and some STV demos (possibly
+                // based on server side plugins?)
+                GameEvent::PlayerDisconnect(d) => debug!("PlayerDisconnect {d:?}"),
+                GameEvent::PlayerHealed(heal) => debug!("PlayerHealed {heal:?}"),
+                GameEvent::PlayerInvulned(invuln) => debug!("PlayerDisconnect {invuln:?}"),
+                GameEvent::PlayerChargeDeployed(c) => debug!("PlayerChargeDeployed {c:?}"),
+
                 _ => {
                     trace!("Unhandled game event: {event:?}");
                     let event_string = format!("{:?}", event);

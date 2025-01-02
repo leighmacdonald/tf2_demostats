@@ -16,7 +16,7 @@ async fn main() -> std::io::Result<()> {
         let bytes = tokio::fs::read(path).await?;
 
         let _span_guard = if multiple_files {
-            Some(tracing::info_span!("Demo", "File={}", arg).entered())
+            Some(tracing::error_span!("Demo", "{}", arg).entered())
         } else {
             None
         };
