@@ -1,12 +1,15 @@
 use crate::parser::{
-    game::{DamageType, RoundState, DEATH_FEIGNED, ENTITY_IN_WATER, ENTITY_ON_GROUND},
+    game::{
+        DamageType, PlayerCondition, RoundState, DEATH_FEIGNED, ENTITY_IN_WATER, ENTITY_ON_GROUND,
+    },
     weapon::{Weapon, WeaponDetail},
 };
+use enumset::EnumSet;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use tf_demo_parser::{
     demo::{
-        data::{DemoTick, ServerTick, UserInfo},
+        data::{DemoTick, UserInfo},
         gameevent_gen::{
             ObjectDestroyedEvent, PlayerDeathEvent, PlayerHurtEvent, TeamPlayCaptureBlockedEvent,
             TeamPlayPointCapturedEvent,
@@ -15,7 +18,7 @@ use tf_demo_parser::{
         message::{
             gameevent::GameEventMessage,
             packetentities::{EntityId, PacketEntity},
-            Message,
+            Message, NetTickMessage,
         },
         packet::{
             datatable::{ClassId, ParseSendTable, ServerClass},
@@ -58,12 +61,13 @@ pub struct DemoSummary {
 pub struct MatchAnalyzer {
     state: DemoSummary,
     user_entities: HashMap<EntityId, UserId>,
+    user_handles: HashMap<u32, UserId>,
     users: BTreeMap<UserId, PlayerMeta>,
     waiting_for_players: bool,
     round_state: RoundState,
     span: Option<EnteredSpan>,
     tick: DemoTick,
-    server_tick: ServerTick,
+    server_tick: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -183,11 +187,24 @@ pub struct PlayerSummary {
     origin: Vector,
     #[serde(skip)]
     eye: VectorXY,
+    #[serde(skip)]
+    cond: EnumSet<PlayerCondition>,
+    #[serde(skip)]
+    cond_source: u32,
+    #[serde(skip)]
+    handle: u32,
 }
 
 impl PlayerSummary {
     fn in_air(&self) -> bool {
         !self.on_ground && !self.in_water
+    }
+
+    fn update_cond<const OFFSET: usize>(&mut self, bits: u32) {
+        let mask: u128 = 0xffffffff << OFFSET;
+        let new_cond = (self.cond.as_repr() & !mask) | ((bits as u128) << OFFSET);
+        self.cond = EnumSet::<PlayerCondition>::from_repr(new_cond);
+        trace!("Player {} condition now {:?}", self.name, self.cond);
     }
 }
 
@@ -294,6 +311,21 @@ impl MatchAnalyzer {
         const EYE_Y: SendPropIdentifier =
             SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_angEyeAngles[1]");
 
+        const HANDLE: SendPropIdentifier =
+            SendPropIdentifier::new("DT_AttributeManager", "m_hOuter");
+
+        const COND_0: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFPlayerShared", "m_nPlayerCond");
+        const COND_1: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFPlayerShared", "m_nPlayerCondEx");
+        const COND_2: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFPlayerShared", "m_nPlayerCondEx2");
+        const COND_3: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFPlayerShared", "m_nPlayerCondEx3");
+
+        const COND_SOURCE: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFPlayerConditionSource", "m_pProvider");
+
         let entity_id = &entity.entity_index;
         let Some(user_id) = self.user_entities.get(entity_id) else {
             error!("Unknown player entity id: {entity_id}");
@@ -351,12 +383,22 @@ impl MatchAnalyzer {
                     summary.origin.x = vec.x;
                     summary.origin.y = vec.y;
                 }
-                (ORIGIN_Z, SendPropValue::Float(z)) => {
-                    summary.origin.z = *z;
-                }
+                (ORIGIN_Z, &SendPropValue::Float(z)) => summary.origin.z = z,
 
-                (EYE_X, SendPropValue::Float(x)) => summary.eye.x = *x,
-                (EYE_Y, SendPropValue::Float(y)) => summary.eye.y = *y,
+                (EYE_X, &SendPropValue::Float(x)) => summary.eye.x = x,
+                (EYE_Y, &SendPropValue::Float(y)) => summary.eye.y = y,
+
+                (HANDLE, &SendPropValue::Integer(h)) => {
+                    trace!("player ({}) has handle {h}", summary.name);
+                    summary.handle = h as u32;
+                    self.user_handles.insert(h as u32, *user_id);
+                }
+                (COND_SOURCE, &SendPropValue::Integer(x)) => summary.cond_source = x as u32,
+
+                (COND_0, &SendPropValue::Integer(x)) => summary.update_cond::<0>(x as u32),
+                (COND_1, &SendPropValue::Integer(x)) => summary.update_cond::<32>(x as u32),
+                (COND_2, &SendPropValue::Integer(x)) => summary.update_cond::<64>(x as u32),
+                (COND_3, &SendPropValue::Integer(x)) => summary.update_cond::<96>(x as u32),
 
                 _ => {
                     trace!("Unhandled player ({}) entity prop {prop:?}", summary.name);
@@ -379,7 +421,8 @@ impl MatchAnalyzer {
                         match table_name.as_str() {
                             "m_iTeam" => {}
                             "m_iHealing" => {
-                                // TODO
+                                player.healing.healing =
+                                    i64::try_from(&prop.value).unwrap_or_default() as u32;
                             }
                             "m_iTotalScore" => {
                                 player.points =
@@ -500,7 +543,8 @@ impl MatchAnalyzer {
             }
         }
 
-        // TODO: Tune this definition. Suppstats uses "distance from ground" but that doesn't seem much better.
+        // TODO: Tune this definition. Suppstats uses "distance from
+        // ground" but that doesn't seem much better.
         let airshot = victim.in_air() && (self.tick - victim.started_flying > 16);
 
         let attacker_is_world = death.attacker == 0;
