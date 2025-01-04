@@ -1,3 +1,4 @@
+use enumset::EnumSetType;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 
@@ -267,8 +268,9 @@ pub enum PlayerAnim {
 }
 
 #[repr(u16)]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TryFromPrimitive)]
-pub enum PlayerConditiion {
+#[derive(Debug, Serialize, Deserialize, TryFromPrimitive, EnumSetType)]
+#[enumset(repr = "u128")]
+pub enum PlayerCondition {
     Aiming = 0, // Sniper and heavy
     Zoomed = 1,
     Disguising = 2,
@@ -349,7 +351,7 @@ pub enum PlayerConditiion {
     HalloweenGhostMode = 77,
     MinicritboostedOnKill = 78,
     ObscuredSmoke = 79,
-    ParachuteDeployed = 80,
+    Parachute = 80,
     BlastJumping = 81,
     HalloweenKart = 82,
     HalloweenKartDash = 83,
@@ -391,4 +393,16 @@ pub enum PlayerConditiion {
     PasstimePenaltyDebuff = 119,
     GrappledToPlayer = 120,
     GrappledByPlayer = 121,
+    ParachuteDeployed = 122,
+    GasPasser = 123,
+    BurningPyro = 124,
+    ThermalThrusterJumping = 125,
+    LostFooting = 126,
+    AirCurrent = 127,
+    // These are in Cond4 -- ignore for now so that we can fit in a u128
+    //
+    // HalloweenHellHeal = 128,
+    // PowerupModeDominant = 129,
+    // ImmuneToPushback = 130,
 }
+//pub const LAST_CONDITION: PlayerCondition = PlayerCondition::GrappledByPlayer;
