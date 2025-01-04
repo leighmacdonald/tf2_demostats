@@ -654,6 +654,22 @@ impl MatchAnalyzer {
 
         summary.damage += hurt.damage_amount as u32;
     }
+
+    pub fn handle_tick(&mut self, tick: &DemoTick, server_tick: Option<&NetTickMessage>) {
+        self.tick = *tick;
+
+        let server_tick = server_tick.map(|x| u32::from(x.tick)).unwrap_or(0);
+
+        self.server_tick = server_tick;
+
+        // Must explicitly drop the old span to avoid creating
+        // a cycle where the new span points to the old span.
+        self.span = None;
+
+        self.span = Some(
+            error_span!("Tick", tick = u32::from(*tick), server_tick = server_tick,).entered(),
+        );
+    }
 }
 
 impl MessageHandler for MatchAnalyzer {
@@ -670,24 +686,12 @@ impl MessageHandler for MatchAnalyzer {
     }
 
     fn handle_message(&mut self, message: &Message, tick: DemoTick, parser_state: &ParserState) {
-        self.tick = tick;
+        if tick != self.tick {
+            self.handle_tick(&tick, None);
+            self.tick = tick;
+        }
         match message {
-            Message::NetTick(t) => {
-                self.server_tick = t.tick;
-
-                // Must explicitly drop the old span to avoid creating
-                // a cycle where the new span points to the old span.
-                self.span = None;
-
-                self.span = Some(
-                    error_span!(
-                        "Tick",
-                        tick = u32::from(tick),
-                        server_tick = u32::from(t.tick)
-                    )
-                    .entered(),
-                );
-            }
+            Message::NetTick(t) => self.handle_tick(&tick, Some(t)),
             Message::PacketEntities(message) => {
                 for entity in message.entities.iter() {
                     self.handle_packet_entity(entity, parser_state);
