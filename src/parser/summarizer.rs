@@ -1,7 +1,5 @@
 use crate::parser::{
-    game::{
-        DamageType, PlayerCondition, RoundState, DEATH_FEIGNED, ENTITY_IN_WATER, ENTITY_ON_GROUND,
-    },
+    game::{DamageType, Death, PlayerCondition, RoundState, ENTITY_IN_WATER, ENTITY_ON_GROUND},
     weapon::{Weapon, WeaponDetail},
 };
 use enumset::EnumSet;
@@ -55,6 +53,16 @@ pub struct PlayerMeta {
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct DemoSummary {
     pub player_summaries: HashMap<UserId, PlayerSummary>,
+    pub deaths: Vec<PlayerDeath>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct PlayerDeath {}
+
+#[derive(Debug, Default)]
+pub struct WeaponState {
+    pub class: String,
+    pub charge: f32,
 }
 
 #[derive(Debug, Default)]
@@ -506,13 +514,23 @@ impl MatchAnalyzer {
 
     pub fn handle_player_death(&mut self, death: &PlayerDeathEvent) {
         debug!(
-            "PlayerDeath {death:?} {} {:?}",
+            "Player death {death:?} {} {:?}",
             self.waiting_for_players, self.round_state
         );
         if self.waiting_for_players {
             return;
         }
-        let feigned = death.death_flags & DEATH_FEIGNED != 0;
+
+        let flags = EnumSet::<Death>::try_from_repr(death.death_flags).unwrap_or_else(|| {
+            error!("Unknown death flags: {}", death.death_flags);
+            EnumSet::<Death>::new()
+        });
+
+        let feigned = flags.contains(Death::Feign);
+
+        if feigned && flags.contains(Death::Domination) {
+            error!("death: {flags:?} {:?}", death);
+        }
 
         if death.user_id == death.attacker {
             let Some(suicider) = self

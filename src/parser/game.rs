@@ -19,8 +19,6 @@ pub enum RoundState {
     BetweenRounds = 10,
 }
 
-pub const DEATH_FEIGNED: u16 = 0x0020;
-
 pub const ENTITY_ON_GROUND: u16 = 1;
 pub const ENTITY_IN_WATER: u16 = 1 << 9;
 
@@ -265,6 +263,23 @@ pub enum PlayerAnim {
     PasstimeThrowEnd,
     PasstimeThrowCancel,
     AttackPrimarySuper,
+}
+
+#[repr(u16)]
+#[derive(Debug, Serialize, Deserialize, TryFromPrimitive, EnumSetType)]
+#[enumset(repr = "u16")]
+pub enum Death {
+    Domination = 0,
+    AssisterDomination = 1,
+    Revenge = 2,
+    AssisterRevenge = 3,
+    FirstBlood = 4,
+    Feign = 5,
+    Interrupted = 6,
+    Gibbed = 7,
+    Purgatory = 8,
+    Miniboss = 9,
+    Australium = 10,
 }
 
 #[repr(u16)]
