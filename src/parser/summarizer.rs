@@ -1,5 +1,8 @@
 use crate::parser::{
-    game::{DamageType, Death, PlayerCondition, RoundState, ENTITY_IN_WATER, ENTITY_ON_GROUND},
+    game::{
+        DamageType, Death, PlayerCondition, RoundState, ENTITY_IN_WATER, ENTITY_ON_GROUND,
+        INVALID_HANDLE,
+    },
     weapon::{Weapon, WeaponDetail},
 };
 use enumset::EnumSet;
@@ -70,6 +73,7 @@ pub struct MatchAnalyzer {
     state: DemoSummary,
     user_entities: HashMap<EntityId, UserId>,
     user_handles: HashMap<u32, UserId>,
+    weapon_handles: HashMap<u32, WeaponState>,
     users: BTreeMap<UserId, PlayerMeta>,
     waiting_for_players: bool,
     round_state: RoundState,
@@ -154,10 +158,12 @@ pub struct PlayerSummary {
     pub scoreboard_damage: Option<u32>,
     pub damage_taken: u32,
 
+    pub dominations: u32, // This player dominated another player
+    pub dominated: u32,   // Another player dominated this player
+    pub revenges: u32,    // This player got revenge on another player
+    pub revenged: u32,    // Another player got revenge on this player
+
     // TODO
-    pub dominations: u32,
-    pub dominated: u32,
-    pub revenges: u32,
     pub healing_taken: u32,
     pub health_packs: u32,
     pub healing_packs: u32, // total healing from packs
@@ -201,6 +207,8 @@ pub struct PlayerSummary {
     cond_source: u32,
     #[serde(skip)]
     handle: u32,
+    #[serde(skip)]
+    active_weapon_handle: u32,
 }
 
 impl PlayerSummary {
@@ -285,6 +293,29 @@ impl MatchAnalyzer {
                 );
             }
         }
+
+        const MEDIGUN_CHARGE_LEVEL: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFWeaponMedigunDataNonLocal", "m_flChargeLevel");
+        const SELF_HANDLE: SendPropIdentifier =
+            SendPropIdentifier::new("DT_AttributeContainer", "m_hOuter");
+
+        let mut handle: Option<u32> = None;
+        let mut charge: Option<f32> = None;
+        for prop in packet.props(parser_state) {
+            match (prop.identifier, &prop.value) {
+                (MEDIGUN_CHARGE_LEVEL, &SendPropValue::Float(z)) => {
+                    charge = Some(z);
+                }
+                (SELF_HANDLE, &SendPropValue::Integer(h)) => handle = Some(h as u32),
+                _ => {}
+            }
+        }
+        if let Some(handle) = handle {
+            let wep = self.weapon_handles.entry(handle).or_default();
+            if let Some(charge) = charge {
+                wep.charge = charge;
+            }
+        }
     }
 
     fn handle_player_entity(&mut self, entity: &PacketEntity, _parser_state: &ParserState) {
@@ -330,6 +361,9 @@ impl MatchAnalyzer {
             SendPropIdentifier::new("DT_TFPlayerShared", "m_nPlayerCondEx2");
         const COND_3: SendPropIdentifier =
             SendPropIdentifier::new("DT_TFPlayerShared", "m_nPlayerCondEx3");
+
+        const ACTIVE_WEAPON_HANDLE: SendPropIdentifier =
+            SendPropIdentifier::new("DT_BaseCombatCharacter", "m_hActiveWeapon");
 
         const COND_SOURCE: SendPropIdentifier =
             SendPropIdentifier::new("DT_TFPlayerConditionSource", "m_pProvider");
@@ -407,6 +441,13 @@ impl MatchAnalyzer {
                 (COND_1, &SendPropValue::Integer(x)) => summary.update_cond::<32>(x as u32),
                 (COND_2, &SendPropValue::Integer(x)) => summary.update_cond::<64>(x as u32),
                 (COND_3, &SendPropValue::Integer(x)) => summary.update_cond::<96>(x as u32),
+
+                (ACTIVE_WEAPON_HANDLE, &SendPropValue::Integer(x)) => {
+                    if x as u32 == INVALID_HANDLE {
+                        continue;
+                    }
+                    summary.active_weapon_handle = x as u32;
+                }
 
                 _ => {
                     trace!("Unhandled player ({}) entity prop {prop:?}", summary.name);
@@ -528,10 +569,6 @@ impl MatchAnalyzer {
 
         let feigned = flags.contains(Death::Feign);
 
-        if feigned && flags.contains(Death::Domination) {
-            error!("death: {flags:?} {:?}", death);
-        }
-
         if death.user_id == death.attacker {
             let Some(suicider) = self
                 .state
@@ -554,6 +591,22 @@ impl MatchAnalyzer {
             return;
         };
         if !feigned {
+            // TODO: separate these by post-round as well? Probably we
+            // ought to count the post-round dominations/revenges
+            // since otherwise the dom/revenge won't be counted during
+            if flags.contains(Death::Domination) {
+                victim.dominated += 1;
+            }
+            if flags.contains(Death::AssisterDomination) {
+                victim.dominated += 1;
+            }
+            if flags.contains(Death::Revenge) {
+                victim.revenged += 1;
+            }
+            if flags.contains(Death::AssisterRevenge) {
+                victim.revenged += 1;
+            }
+
             if self.round_state == RoundState::TeamWin {
                 victim.postround_deaths += 1;
             } else {
@@ -674,6 +727,10 @@ impl MatchAnalyzer {
     }
 
     pub fn handle_tick(&mut self, tick: &DemoTick, server_tick: Option<&NetTickMessage>) {
+        if *tick != self.tick {
+            self.on_tick();
+        }
+
         self.tick = *tick;
 
         let server_tick = server_tick.map(|x| u32::from(x.tick)).unwrap_or(0);
@@ -687,6 +744,20 @@ impl MatchAnalyzer {
         self.span = Some(
             error_span!("Tick", tick = u32::from(*tick), server_tick = server_tick,).entered(),
         );
+    }
+
+    // Do processing at the end of a tick, once all entities have been
+    // processed. This is important when referring to entities that
+    // may have been both created and referenced in the same packet.
+    fn on_tick(&mut self) {
+        for (_, v) in &self.state.player_summaries {
+            if v.active_weapon_handle != 0 {
+                let Some(_) = self.weapon_handles.get(&v.active_weapon_handle) else {
+                    error!("could not find weapon handle {:?}", v.active_weapon_handle);
+                    continue;
+                };
+            }
+        }
     }
 }
 

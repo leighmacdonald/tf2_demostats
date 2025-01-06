@@ -19,6 +19,7 @@ pub enum RoundState {
     BetweenRounds = 10,
 }
 
+pub const INVALID_HANDLE: u32 = 0x1fffff;
 pub const ENTITY_ON_GROUND: u16 = 1;
 pub const ENTITY_IN_WATER: u16 = 1 << 9;
 
