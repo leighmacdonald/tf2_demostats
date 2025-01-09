@@ -74,6 +74,7 @@ pub struct MatchAnalyzer {
     state: DemoSummary,
     user_entities: HashMap<EntityId, UserId>,
     user_handles: HashMap<u32, UserId>,
+    weapon_owners: HashMap<u32, UserId>,
     weapon_handles: HashMap<u32, WeaponState>,
     entity_handles: HashMap<EntityId, u32>, // Entity -> Handle lookup
     users: BTreeMap<UserId, PlayerMeta>,
@@ -668,19 +669,49 @@ impl MatchAnalyzer {
                 (COND_3, &SendPropValue::Integer(x)) => summary.update_cond::<96>(x as u32),
 
                 (ACTIVE_WEAPON_HANDLE, &SendPropValue::Integer(x)) => {
-                    if x as u32 == INVALID_HANDLE {
+                    let h = x as u32;
+                    if h == INVALID_HANDLE {
                         continue;
                     }
-                    summary.active_weapon_handle = x as u32;
+                    summary.active_weapon_handle = h;
+                    self.weapon_owners.insert(h, *user_id);
                 }
 
-                (WEP_0, &SendPropValue::Integer(x)) => summary.weapon_handles[0] = x as u32,
-                (WEP_1, &SendPropValue::Integer(x)) => summary.weapon_handles[1] = x as u32,
-                (WEP_2, &SendPropValue::Integer(x)) => summary.weapon_handles[2] = x as u32,
-                (WEP_3, &SendPropValue::Integer(x)) => summary.weapon_handles[3] = x as u32,
-                (WEP_4, &SendPropValue::Integer(x)) => summary.weapon_handles[4] = x as u32,
-                (WEP_5, &SendPropValue::Integer(x)) => summary.weapon_handles[5] = x as u32,
-                (WEP_6, &SendPropValue::Integer(x)) => summary.weapon_handles[6] = x as u32,
+                (WEP_0, &SendPropValue::Integer(x)) => {
+                    let handle = x as u32;
+                    summary.weapon_handles[0] = handle;
+                    self.weapon_owners.insert(handle, *user_id);
+                }
+                (WEP_1, &SendPropValue::Integer(x)) => {
+                    let handle = x as u32;
+                    summary.weapon_handles[1] = handle;
+                    self.weapon_owners.insert(handle, *user_id);
+                }
+                (WEP_2, &SendPropValue::Integer(x)) => {
+                    let handle = x as u32;
+                    summary.weapon_handles[2] = handle;
+                    self.weapon_owners.insert(handle, *user_id);
+                }
+                (WEP_3, &SendPropValue::Integer(x)) => {
+                    let handle = x as u32;
+                    summary.weapon_handles[3] = handle;
+                    self.weapon_owners.insert(handle, *user_id);
+                }
+                (WEP_4, &SendPropValue::Integer(x)) => {
+                    let handle = x as u32;
+                    summary.weapon_handles[4] = handle;
+                    self.weapon_owners.insert(handle, *user_id);
+                }
+                (WEP_5, &SendPropValue::Integer(x)) => {
+                    let handle = x as u32;
+                    summary.weapon_handles[5] = handle;
+                    self.weapon_owners.insert(handle, *user_id);
+                }
+                (WEP_6, &SendPropValue::Integer(x)) => {
+                    let handle = x as u32;
+                    summary.weapon_handles[6] = handle;
+                    self.weapon_owners.insert(handle, *user_id);
+                }
                 (WEP_7, &SendPropValue::Integer(_)) => error!("Unexpected 8th weapons"),
 
                 _ => {
