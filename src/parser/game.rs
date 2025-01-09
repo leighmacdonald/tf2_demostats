@@ -2,7 +2,9 @@ use enumset::EnumSetType;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Serialize, IntoPrimitive, TryFromPrimitive, PartialEq, Debug, Default)]
+#[derive(
+    Copy, Clone, Deserialize, Serialize, IntoPrimitive, TryFromPrimitive, PartialEq, Debug, Default,
+)]
 #[repr(u16)]
 pub enum RoundState {
     #[default]
@@ -23,7 +25,9 @@ pub const INVALID_HANDLE: u32 = 0x1fffff;
 pub const ENTITY_ON_GROUND: u16 = 1;
 pub const ENTITY_IN_WATER: u16 = 1 << 9;
 
-#[derive(Deserialize, Serialize, IntoPrimitive, TryFromPrimitive, PartialEq, Debug)]
+#[derive(
+    Copy, Clone, Deserialize, Serialize, IntoPrimitive, TryFromPrimitive, PartialEq, Debug,
+)]
 #[repr(u16)]
 pub enum DamageType {
     Normal = 0,
