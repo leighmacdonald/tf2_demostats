@@ -3,7 +3,7 @@ use crate::parser::{
         DamageType, Death, PlayerCondition, RoundState, ENTITY_IN_WATER, ENTITY_ON_GROUND,
         INVALID_HANDLE,
     },
-    weapon::{Weapon, WeaponDetail},
+    weapon::Weapon,
 };
 use enumset::EnumSet;
 use serde::{Deserialize, Serialize};
@@ -34,7 +34,7 @@ use tf_demo_parser::{
     },
     MessageType, ParserState, ReadResult, Stream,
 };
-use tracing::{debug, error, error_span, span::EnteredSpan, trace};
+use tracing::{debug, error, error_span, info, span::EnteredSpan, trace};
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlayerMeta {
@@ -66,6 +66,7 @@ pub struct PlayerDeath {}
 pub struct WeaponState {
     pub class: String,
     pub charge: f32,
+    pub id: u32,
 }
 
 #[derive(Debug, Default)]
@@ -90,24 +91,6 @@ pub struct Killstreak {
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
-pub struct PlayerClass {
-    pub class: Class,
-    pub kills: u32,
-    pub assists: u32,
-    pub deaths: u32,
-    pub playtime: u32,
-    pub dominations: u32,
-    pub dominated: u32,
-    pub revenges: u32,
-    pub damage: u32,
-    pub damage_taken: u32,
-    pub healing_taken: u32,
-    pub captures: u32,
-    pub captures_blocked: u32,
-    pub building_destroyed: u32,
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct HealersSummary {
     pub healing: u32,
     pub charges_uber: u32,
@@ -122,6 +105,142 @@ pub struct HealersSummary {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
+pub struct Stats {
+    pub kills: u32,
+    pub assists: u32,
+    pub deaths: u32,
+    pub postround_kills: u32,
+    pub postround_assists: u32,
+    pub postround_deaths: u32,
+
+    pub damage: u32, // Added up PlayerHurt events
+    pub damage_taken: u32,
+
+    pub dominations: u32, // This player dominated another player
+    pub dominated: u32,   // Another player dominated this player
+    pub revenges: u32,    // This player got revenge on another player
+    pub revenged: u32,    // Another player got revenge on this player
+
+    // Kills where the victim was in the air for a decent amount of time.
+    // TOOD: clarify this definition
+    pub airshots: u32,
+
+    pub headshot_kills: u32,
+    pub backstab_kills: u32,
+
+    pub headshots: u32,
+    pub backstabs: u32,
+
+    pub was_headshot: u32,
+    pub was_backstabbed: u32,
+    // TODO
+    // pub shots: u32,
+    // pub hits: u32,
+}
+
+impl Stats {
+    pub fn handle_damage_dealt(&mut self, hurt: &PlayerHurtEvent, damage_type: DamageType) {
+        self.damage += hurt.damage_amount as u32;
+
+        if damage_type == DamageType::Backstab {
+            self.backstabs += 1;
+        } else if damage_type == DamageType::Headshot {
+            self.headshots += 1;
+        }
+    }
+
+    pub fn handle_damage_taken(&mut self, hurt: &PlayerHurtEvent, damage_type: DamageType) {
+        self.damage_taken += hurt.damage_amount as u32;
+
+        if damage_type == DamageType::Backstab {
+            self.was_backstabbed += 1;
+        } else if damage_type == DamageType::Headshot {
+            self.was_headshot += 1;
+        }
+    }
+
+    pub fn handle_death(&mut self, round_state: RoundState, flags: EnumSet<Death>) {
+        if flags.contains(Death::Domination) {
+            self.dominated += 1;
+        }
+        if flags.contains(Death::AssisterDomination) {
+            self.dominated += 1;
+        }
+        if flags.contains(Death::Revenge) {
+            self.revenged += 1;
+        }
+        if flags.contains(Death::AssisterRevenge) {
+            self.revenged += 1;
+        }
+
+        if flags.contains(Death::Feign) {
+            return;
+        }
+
+        if round_state == RoundState::TeamWin {
+            self.postround_deaths += 1;
+        } else {
+            self.deaths += 1;
+        }
+    }
+
+    pub fn handle_assist(&mut self, round_state: RoundState, flags: EnumSet<Death>) {
+        if flags.contains(Death::AssisterDomination) {
+            self.dominations += 1;
+        }
+        if flags.contains(Death::AssisterRevenge) {
+            self.revenges += 1;
+        }
+
+        if flags.contains(Death::Feign) {
+            return;
+        }
+
+        if round_state == RoundState::TeamWin {
+            self.postround_assists += 1;
+        } else {
+            self.assists += 1;
+        }
+    }
+
+    pub fn handle_kill(
+        &mut self,
+        round_state: RoundState,
+        flags: EnumSet<Death>,
+        damage_type: DamageType,
+        airshot: bool,
+    ) {
+        if flags.contains(Death::Domination) {
+            self.dominations += 1;
+        }
+        if flags.contains(Death::Revenge) {
+            self.revenges += 1;
+        }
+
+        if flags.contains(Death::Feign) {
+            return;
+        }
+
+        if round_state == RoundState::TeamWin {
+            self.postround_kills += 1;
+            return;
+        }
+
+        self.kills += 1;
+
+        if airshot {
+            self.airshots += 1;
+        }
+
+        if damage_type == DamageType::Backstab {
+            self.backstab_kills += 1;
+        } else if damage_type == DamageType::Headshot {
+            self.headshot_kills += 1;
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct PlayerSummary {
     pub name: String,
     pub steamid: String,
@@ -133,35 +252,27 @@ pub struct PlayerSummary {
     pub connection_count: u32,
     pub bonus_points: Option<u32>,
 
-    pub kills: u32,
+    #[serde(flatten)]
+    pub stats: Stats,
+
+    pub classes: HashMap<Class, Stats>,
+    pub weapons: HashMap<Weapon, Stats>,
+
     pub scoreboard_kills: Option<u32>,
     pub postround_kills: u32,
 
-    pub assists: u32,
     pub scoreboard_assists: Option<u32>, // Only present in PoV demos
     pub postround_assists: u32,
 
     pub suicides: u32,
 
-    pub deaths: u32,
     pub scoreboard_deaths: Option<u32>,
     pub postround_deaths: u32,
 
     pub captures: u32,
     pub captures_blocked: u32,
 
-    // Kills where the victim was in the air for a decent amount of time.
-    // TOOD: clarify this definition
-    pub airshots: u32,
-
-    pub damage: u32, // Added up PlayerHurt events
     pub scoreboard_damage: Option<u32>,
-    pub damage_taken: u32,
-
-    pub dominations: u32, // This player dominated another player
-    pub dominated: u32,   // Another player dominated this player
-    pub revenges: u32,    // This player got revenge on another player
-    pub revenged: u32,    // Another player got revenge on this player
 
     // TODO
     pub healing_taken: u32,
@@ -171,18 +282,12 @@ pub struct PlayerSummary {
     pub building_built: u32,
     pub buildings_destroyed: u32,
     pub ubercharges: u32,
-    pub headshots: u32,
-    pub shots: u32,
-    pub hits: u32,
     pub teleports: u32,
-    pub backstabs: u32,
     pub support: u32,
 
     pub healing: HealersSummary,
     //pub support: u32,
-    pub classes: HashMap<ClassId, PlayerClass>,
     pub killstreaks: Vec<Killstreak>,
-    pub weapons: HashMap<Weapon, WeaponDetail>,
 
     // Flags for internal state tracking but unused elsewhere
     #[serde(skip)]
@@ -221,6 +326,43 @@ impl PlayerSummary {
         let new_cond = (self.cond.as_repr() & !mask) | ((bits as u128) << OFFSET);
         self.cond = EnumSet::<PlayerCondition>::from_repr(new_cond);
         trace!("Player {} condition now {:?}", self.name, self.cond);
+    }
+
+    fn class_stats(&mut self) -> &mut Stats {
+        self.classes.entry(self.class).or_default()
+    }
+
+    fn handle_damage_dealt(&mut self, hurt: &PlayerHurtEvent, damage_type: DamageType) {
+        self.stats.handle_damage_dealt(hurt, damage_type);
+        self.class_stats().handle_damage_dealt(hurt, damage_type);
+    }
+
+    fn handle_damage_taken(&mut self, hurt: &PlayerHurtEvent, damage_type: DamageType) {
+        self.stats.handle_damage_taken(hurt, damage_type);
+        self.class_stats().handle_damage_taken(hurt, damage_type);
+    }
+
+    fn handle_assist(&mut self, round_state: RoundState, flags: EnumSet<Death>) {
+        self.stats.handle_assist(round_state, flags);
+        self.class_stats().handle_assist(round_state, flags);
+    }
+
+    fn handle_kill(
+        &mut self,
+        round_state: RoundState,
+        flags: EnumSet<Death>,
+        damage_type: DamageType,
+        airshot: bool,
+    ) {
+        self.stats
+            .handle_kill(round_state, flags, damage_type, airshot);
+        self.class_stats()
+            .handle_kill(round_state, flags, damage_type, airshot);
+    }
+
+    fn handle_death(&mut self, round_state: RoundState, flags: EnumSet<Death>) {
+        self.stats.handle_death(round_state, flags);
+        self.class_stats().handle_death(round_state, flags);
     }
 }
 
@@ -298,15 +440,19 @@ impl MatchAnalyzer {
             SendPropIdentifier::new("DT_TFWeaponMedigunDataNonLocal", "m_flChargeLevel");
         const SELF_HANDLE: SendPropIdentifier =
             SendPropIdentifier::new("DT_AttributeContainer", "m_hOuter");
+        const ITEM_DEFINITION: SendPropIdentifier =
+            SendPropIdentifier::new("DT_ScriptCreatedItem", "m_iItemDefinitionIndex");
 
         let mut handle: Option<u32> = None;
         let mut charge: Option<f32> = None;
+        let mut id: Option<u32> = None;
         for prop in packet.props(parser_state) {
             match (prop.identifier, &prop.value) {
                 (MEDIGUN_CHARGE_LEVEL, &SendPropValue::Float(z)) => {
                     charge = Some(z);
                 }
                 (SELF_HANDLE, &SendPropValue::Integer(h)) => handle = Some(h as u32),
+                (ITEM_DEFINITION, &SendPropValue::Integer(x)) => id = Some(x as u32),
                 _ => {}
             }
         }
@@ -315,6 +461,10 @@ impl MatchAnalyzer {
             if let Some(charge) = charge {
                 wep.charge = charge;
             }
+            if let Some(id) = id {
+                wep.id = id;
+            }
+            wep.class = class.name.to_string();
         }
     }
 
@@ -562,9 +712,21 @@ impl MatchAnalyzer {
             return;
         }
 
+        if death.attacker == death.assister {
+            error!("Self assist? {:?}", death);
+        }
+
         let flags = EnumSet::<Death>::try_from_repr(death.death_flags).unwrap_or_else(|| {
             error!("Unknown death flags: {}", death.death_flags);
             EnumSet::<Death>::new()
+        });
+
+        let damage_type = DamageType::try_from(death.custom_kill).unwrap_or_else(|e| {
+            error!(
+                "Unknown kill damage type: {}, error: {e}",
+                death.custom_kill
+            );
+            DamageType::Normal
         });
 
         let feigned = flags.contains(Death::Feign);
@@ -578,7 +740,9 @@ impl MatchAnalyzer {
                 error!("Unknown suicider id: {}", death.user_id);
                 return;
             };
-            suicider.suicides += 1;
+            if self.round_state != RoundState::TeamWin {
+                suicider.suicides += 1;
+            }
             return;
         }
 
@@ -590,29 +754,7 @@ impl MatchAnalyzer {
             error!("Unknown victim id: {}", death.user_id);
             return;
         };
-        if !feigned {
-            // TODO: separate these by post-round as well? Probably we
-            // ought to count the post-round dominations/revenges
-            // since otherwise the dom/revenge won't be counted during
-            if flags.contains(Death::Domination) {
-                victim.dominated += 1;
-            }
-            if flags.contains(Death::AssisterDomination) {
-                victim.dominated += 1;
-            }
-            if flags.contains(Death::Revenge) {
-                victim.revenged += 1;
-            }
-            if flags.contains(Death::AssisterRevenge) {
-                victim.revenged += 1;
-            }
-
-            if self.round_state == RoundState::TeamWin {
-                victim.postround_deaths += 1;
-            } else {
-                victim.deaths += 1;
-            }
-        }
+        victim.handle_death(self.round_state, flags);
 
         // TODO: Tune this definition. Suppstats uses "distance from
         // ground" but that doesn't seem much better.
@@ -628,21 +770,22 @@ impl MatchAnalyzer {
                 if self.round_state == RoundState::TeamWin {
                     attacker.postround_kills += 1;
                 } else {
-                    attacker.kills += 1;
-
-                    // TODO: Should we track these for
                     if airshot {
-                        attacker.airshots += 1;
                         debug!("airshot by {}!", attacker.name);
                     }
-
-                    match DamageType::try_from(death.custom_kill) {
-                        Ok(DamageType::Backstab) => attacker.backstabs += 1,
-                        Ok(DamageType::Headshot) => attacker.headshots += 1,
-
-                        Err(_) => error!("Unknown kill damage type: {}", death.custom_kill),
-                        _ => {}
+                    let h = attacker.active_weapon_handle;
+                    if let Some(wep) = self.weapon_handles.get(&h) {
+                        info!(
+                            "death with {} / {} vs entity: {} / {}",
+                            death.weapon, death.weapon_log_class_name, wep.class, wep.id
+                        );
+                    } else {
+                        info!(
+                            "death with {} / {} but unknown player weapon handle: {h}",
+                            death.weapon, death.weapon_log_class_name
+                        );
                     }
+                    attacker.handle_kill(self.round_state, flags, damage_type, airshot);
                 }
             }
         } else if !attacker_is_world {
@@ -659,13 +802,7 @@ impl MatchAnalyzer {
             .player_summaries
             .get_mut(&UserId::from(death.assister as u32));
         if let Some(assister) = assister {
-            if !feigned {
-                if self.round_state == RoundState::TeamWin {
-                    assister.postround_assists += 1;
-                } else {
-                    assister.assists += 1;
-                }
-            }
+            assister.handle_assist(self.round_state, flags);
         } else {
             error!("Unknown assister id: {}", death.assister);
         }
@@ -709,21 +846,39 @@ impl MatchAnalyzer {
     pub fn handle_player_hurt(&mut self, hurt: &PlayerHurtEvent) {
         trace!("Player hurt {:?}", hurt);
 
+        let damage_type = DamageType::try_from(hurt.custom).unwrap_or_else(|e| {
+            error!("Unknown hurt damage type: {}, error: {e}", hurt.custom);
+            DamageType::Normal
+        });
+
         let uid = UserId::from(hurt.user_id);
-        let Some(summary) = self.state.player_summaries.get_mut(&uid) else {
+        let Some(victim) = self.state.player_summaries.get_mut(&uid) else {
             error!("Unknown victim uid {uid} in player hurt event");
             return;
         };
 
-        summary.damage_taken += hurt.damage_amount as u32;
+        victim.handle_damage_taken(hurt, damage_type);
 
         let uid = UserId::from(hurt.user_id);
-        let Some(summary) = self.state.player_summaries.get_mut(&uid) else {
+        let Some(attacker) = self.state.player_summaries.get_mut(&uid) else {
             error!("Unknown attacker uid {uid} in player hurt event");
             return;
         };
 
-        summary.damage += hurt.damage_amount as u32;
+        let h = attacker.active_weapon_handle;
+        if let Some(wep) = self.weapon_handles.get(&h) {
+            info!(
+                "hurt with {} vs entity: {} / {}",
+                hurt.weapon_id, wep.class, wep.id
+            );
+        } else {
+            info!(
+                "hurt with {} but unknown player weapon handle: {h}",
+                hurt.weapon_id
+            );
+        }
+
+        attacker.handle_damage_dealt(hurt, damage_type);
     }
 
     pub fn handle_tick(&mut self, tick: &DemoTick, server_tick: Option<&NetTickMessage>) {

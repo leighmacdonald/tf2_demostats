@@ -17,11 +17,3 @@ pub enum Weapon {
     ShitgunHWG,
     ShotgunPyro,
 }
-
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
-pub struct WeaponDetail {
-    pub shots: u32,
-    pub hits: u32,
-    pub damage: u32,
-    pub kills: u32,
-}
