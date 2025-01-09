@@ -348,6 +348,8 @@ pub struct PlayerSummary {
     weapon_handles: Box<[u32; 7]>,
     #[serde(skip)]
     charge: f32, // ie med charge -- not wired to always be up to date!
+    #[serde(skip)]
+    kritzed: bool,
 }
 
 impl PlayerSummary {
@@ -579,11 +581,16 @@ impl MatchAnalyzer {
         const COND_3: SendPropIdentifier =
             SendPropIdentifier::new("DT_TFPlayerShared", "m_nPlayerCondEx3");
 
-        const ACTIVE_WEAPON_HANDLE: SendPropIdentifier =
-            SendPropIdentifier::new("DT_BaseCombatCharacter", "m_hActiveWeapon");
+        // Separate condition bits
+        // TODO: seems to only be used for Kritzkreig?
+        const COND_BITS: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFPlayerConditionListExclusive", "_condition_bits");
 
         const COND_SOURCE: SendPropIdentifier =
             SendPropIdentifier::new("DT_TFPlayerConditionSource", "m_pProvider");
+
+        const ACTIVE_WEAPON_HANDLE: SendPropIdentifier =
+            SendPropIdentifier::new("DT_BaseCombatCharacter", "m_hActiveWeapon");
 
         const WEP_0: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "000");
         const WEP_1: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "001");
@@ -667,6 +674,14 @@ impl MatchAnalyzer {
                 (COND_1, &SendPropValue::Integer(x)) => summary.update_cond::<32>(x as u32),
                 (COND_2, &SendPropValue::Integer(x)) => summary.update_cond::<64>(x as u32),
                 (COND_3, &SendPropValue::Integer(x)) => summary.update_cond::<96>(x as u32),
+
+                (COND_BITS, &SendPropValue::Integer(x)) => {
+                    if x == 0 || x == 2048 {
+                        summary.kritzed = x == 2048;
+                    } else {
+                        error!("Unknown _condition_bits: {x}");
+                    }
+                }
 
                 (ACTIVE_WEAPON_HANDLE, &SendPropValue::Integer(x)) => {
                     let h = x as u32;
