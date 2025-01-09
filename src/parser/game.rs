@@ -12,7 +12,7 @@ pub enum RoundState {
     Pregame = 1,
     StartGame = 2,
     PreRound = 3,
-    RoundRunning = 4,
+    Running = 4,
     TeamWin = 5,
     Restart = 6,
     Stalemate = 7,
