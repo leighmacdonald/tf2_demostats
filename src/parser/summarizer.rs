@@ -343,6 +343,8 @@ pub struct PlayerSummary {
     handle: u32,
     #[serde(skip)]
     active_weapon_handle: u32,
+    #[serde(skip)]
+    weapon_handles: Box<[u32; 7]>,
 }
 
 impl PlayerSummary {
@@ -572,6 +574,15 @@ impl MatchAnalyzer {
         const COND_SOURCE: SendPropIdentifier =
             SendPropIdentifier::new("DT_TFPlayerConditionSource", "m_pProvider");
 
+        const WEP_0: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "000");
+        const WEP_1: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "001");
+        const WEP_2: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "002");
+        const WEP_3: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "003");
+        const WEP_4: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "004");
+        const WEP_5: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "005");
+        const WEP_6: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "006");
+        const WEP_7: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "007");
+
         let entity_id = &entity.entity_index;
         let Some(user_id) = self.user_entities.get(entity_id) else {
             error!("Unknown player entity id: {entity_id}");
@@ -652,6 +663,15 @@ impl MatchAnalyzer {
                     }
                     summary.active_weapon_handle = x as u32;
                 }
+
+                (WEP_0, &SendPropValue::Integer(x)) => summary.weapon_handles[0] = x as u32,
+                (WEP_1, &SendPropValue::Integer(x)) => summary.weapon_handles[1] = x as u32,
+                (WEP_2, &SendPropValue::Integer(x)) => summary.weapon_handles[2] = x as u32,
+                (WEP_3, &SendPropValue::Integer(x)) => summary.weapon_handles[3] = x as u32,
+                (WEP_4, &SendPropValue::Integer(x)) => summary.weapon_handles[4] = x as u32,
+                (WEP_5, &SendPropValue::Integer(x)) => summary.weapon_handles[5] = x as u32,
+                (WEP_6, &SendPropValue::Integer(x)) => summary.weapon_handles[6] = x as u32,
+                (WEP_7, &SendPropValue::Integer(_)) => error!("Unexpected 8th weapons"),
 
                 _ => {
                     trace!("Unhandled player ({}) entity prop {prop:?}", summary.name);
