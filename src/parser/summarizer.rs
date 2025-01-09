@@ -98,13 +98,13 @@ pub struct HealersSummary {
     pub healing: u32,
     pub postround_healing: u32,
 
-    pub charges_uber: u32,
-    pub charges_kritz: u32,
-    pub charges_vacc: u32,
-    pub charges_quickfix: u32,
     pub drops: u32,
     pub near_full_charge_death: u32,
     // TODO:
+    // pub charges_uber: u32,
+    // pub charges_kritz: u32,
+    // pub charges_vacc: u32,
+    // pub charges_quickfix: u32,
     // pub avg_uber_length: u32,
     // pub major_adv_lost: u32,
     // pub biggest_adv_lost: u32,
@@ -345,6 +345,8 @@ pub struct PlayerSummary {
     active_weapon_handle: u32,
     #[serde(skip)]
     weapon_handles: Box<[u32; 7]>,
+    #[serde(skip)]
+    charge: f32, // ie med charge -- not wired to always be up to date!
 }
 
 impl PlayerSummary {
@@ -392,6 +394,14 @@ impl PlayerSummary {
     }
 
     fn handle_death(&mut self, round_state: RoundState, flags: EnumSet<Death>) {
+        if self.class == Class::Medic && round_state == RoundState::Running {
+            if self.charge == 1.0 {
+                self.healing.drops += 1;
+            } else if self.charge > 0.95 {
+                self.healing.near_full_charge_death += 1;
+            }
+        }
+
         self.stats.handle_death(round_state, flags);
         self.class_stats().handle_death(round_state, flags);
     }
@@ -849,6 +859,16 @@ impl MatchAnalyzer {
             error!("Unknown victim id: {}", death.user_id);
             return;
         };
+
+        if victim.class == Class::Medic {
+            let medigun_h = victim.weapon_handles[1];
+            if let Some(medigun) = self.weapon_handles.get(&medigun_h) {
+                victim.charge = medigun.charge;
+            } else {
+                error!("Med died without a secondary {medigun_h}");
+            }
+        }
+
         victim.handle_death(self.round_state, flags);
 
         // TODO: Tune this definition. Suppstats uses "distance from
