@@ -75,6 +75,7 @@ pub struct MatchAnalyzer {
     user_entities: HashMap<EntityId, UserId>,
     user_handles: HashMap<u32, UserId>,
     weapon_handles: HashMap<u32, WeaponState>,
+    entity_handles: HashMap<EntityId, u32>, // Entity -> Handle lookup
     users: BTreeMap<UserId, PlayerMeta>,
     waiting_for_players: bool,
     round_state: RoundState,
@@ -103,9 +104,10 @@ pub struct HealersSummary {
     pub charges_quickfix: u32,
     pub drops: u32,
     pub near_full_charge_death: u32,
-    pub avg_uber_length: u32,
-    pub major_adv_lost: u32,
-    pub biggest_adv_lost: u32,
+    // TODO:
+    // pub avg_uber_length: u32,
+    // pub major_adv_lost: u32,
+    // pub biggest_adv_lost: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -297,20 +299,18 @@ pub struct PlayerSummary {
 
     pub scoreboard_damage: Option<u32>,
 
-    // TODO
-    pub healing_taken: u32,
-    pub health_packs: u32,
-    pub healing_packs: u32, // total healing from packs
-    pub extinguishes: u32,
-    pub building_built: u32,
-    pub buildings_destroyed: u32,
-    pub ubercharges: u32,
-    pub teleports: u32,
-    pub support: u32,
-
     pub healing: HealersSummary,
+
+    // TODO
+    //pub healing_taken: u32,
+    //pub health_packs: u32,
+    //pub healing_packs: u32, // total healing from packs
+    //pub extinguishes: u32,
+    //pub building_built: u32,
+    //pub buildings_destroyed: u32,
+    //pub teleports: u32,
     //pub support: u32,
-    pub killstreaks: Vec<Killstreak>,
+    //pub killstreaks: Vec<Killstreak>,
 
     // Flags for internal state tracking but unused elsewhere
     #[serde(skip)]
@@ -498,7 +498,15 @@ impl MatchAnalyzer {
                 _ => {}
             }
         }
+
+        let mut existing_handle = self.entity_handles.get(&packet.entity_index).copied();
+
         if let Some(handle) = handle {
+            self.entity_handles.insert(packet.entity_index, handle);
+            existing_handle = Some(handle);
+        }
+
+        if let Some(handle) = existing_handle {
             let wep = self.weapon_handles.entry(handle).or_default();
             if let Some(charge) = charge {
                 wep.charge = charge;
@@ -507,6 +515,10 @@ impl MatchAnalyzer {
                 wep.id = id;
             }
             wep.class = class.name.to_string();
+        } else {
+            if charge.is_some() {
+                error!("Could not find weapon handle for medigun {packet:?}");
+            }
         }
     }
 
