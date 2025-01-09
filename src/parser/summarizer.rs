@@ -34,7 +34,7 @@ use tf_demo_parser::{
     },
     MessageType, ParserState, ReadResult, Stream,
 };
-use tracing::{debug, error, error_span, info, span::EnteredSpan, trace};
+use tracing::{debug, error, error_span, info, span::EnteredSpan, trace, warn};
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlayerMeta {
@@ -90,9 +90,13 @@ pub struct Killstreak {
     pub duration: u32,
 }
 
+// Med specific stats
 #[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct HealersSummary {
+    pub preround_healing: u32,
     pub healing: u32,
+    pub postround_healing: u32,
+
     pub charges_uber: u32,
     pub charges_kritz: u32,
     pub charges_vacc: u32,
@@ -112,6 +116,11 @@ pub struct Stats {
     pub postround_kills: u32,
     pub postround_assists: u32,
     pub postround_deaths: u32,
+
+    // Dupes with HealersSummary to cover non-med healing
+    pub preround_healing: u32,
+    pub healing: u32,
+    pub postround_healing: u32,
 
     pub damage: u32, // Added up PlayerHurt events
     pub damage_taken: u32,
@@ -238,6 +247,20 @@ impl Stats {
             self.headshot_kills += 1;
         }
     }
+
+    pub fn handle_healing(&mut self, round_state: RoundState, amount: u32) {
+        if round_state == RoundState::TeamWin {
+            return;
+        }
+
+        if round_state == RoundState::PreRound {
+            self.preround_healing += amount;
+        } else if round_state == RoundState::TeamWin {
+            self.postround_healing += amount;
+        } else {
+            self.healing += amount;
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -300,6 +323,12 @@ pub struct PlayerSummary {
     class: Class,
     #[serde(skip)]
     health: u32,
+
+    // Temporary stat for tracking healing score changes, not the
+    // actual stat
+    #[serde(skip)]
+    scoreboard_healing: u32,
+
     #[serde(skip)]
     sim_time: u32,
     #[serde(skip)]
@@ -363,6 +392,19 @@ impl PlayerSummary {
     fn handle_death(&mut self, round_state: RoundState, flags: EnumSet<Death>) {
         self.stats.handle_death(round_state, flags);
         self.class_stats().handle_death(round_state, flags);
+    }
+
+    fn handle_healing(&mut self, round_state: RoundState, amount: u32) {
+        if round_state == RoundState::PreRound {
+            self.healing.preround_healing += amount;
+        } else if round_state == RoundState::TeamWin {
+            self.healing.postround_healing += amount;
+        } else {
+            self.healing.healing += amount;
+        }
+
+        self.stats.handle_healing(round_state, amount);
+        self.class_stats().handle_healing(round_state, amount);
     }
 }
 
@@ -620,8 +662,29 @@ impl MatchAnalyzer {
                         match table_name.as_str() {
                             "m_iTeam" => {}
                             "m_iHealing" => {
-                                player.healing.healing =
-                                    i64::try_from(&prop.value).unwrap_or_default() as u32;
+                                let hi = i64::try_from(&prop.value).unwrap_or_default();
+                                if hi < 0 {
+                                    error!("Negative healing of {hi} by {}", player.name);
+                                    return;
+                                }
+                                let h = hi as u32;
+
+                                // Skip the first real value; sometimes STV starts a little late and we can't distinguish the healing values.
+                                if player.scoreboard_healing == 0 {
+                                    player.scoreboard_healing = h;
+                                    return;
+                                }
+
+                                // Add up deltas, as this tracker resets to 0 mid round.
+                                let dh = h.saturating_sub(player.scoreboard_healing);
+                                if dh > 300 {
+                                    // Never saw a delta this large in our corpus; may be a sign of a miscount
+                                    warn!("Huge healing delta of {dh} by {}", player.name);
+                                }
+
+                                player.handle_healing(self.round_state, dh);
+
+                                player.scoreboard_healing = h;
                             }
                             "m_iTotalScore" => {
                                 player.points =
