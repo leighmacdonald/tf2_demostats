@@ -37,7 +37,7 @@ use tf_demo_parser::{
     },
     MessageType, ParserState, ReadResult, Stream,
 };
-use tracing::{debug, error, error_span, info, span::EnteredSpan, trace, warn};
+use tracing::{debug, debug_span, error, info, span::EnteredSpan, trace, warn};
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlayerMeta {
@@ -1123,7 +1123,7 @@ impl<'a> MatchAnalyzer<'a> {
         self.span = None;
 
         self.span = Some(
-            error_span!("Tick", tick = u32::from(*tick), server_tick = server_tick,).entered(),
+            debug_span!("Tick", tick = u32::from(*tick), server_tick = server_tick,).entered(),
         );
     }
 
