@@ -87,7 +87,13 @@ pub struct MatchAnalyzer<'a> {
     span: Option<EnteredSpan>,
     tick: DemoTick,
     server_tick: u32,
+    tick_events: Vec<Event>,
     schema: &'a Schema,
+}
+
+#[derive(Debug)]
+pub enum Event {
+    MedigunCharged(u32),
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -106,11 +112,11 @@ pub struct HealersSummary {
 
     pub drops: u32,
     pub near_full_charge_death: u32,
+    pub charges_uber: u32,
+    pub charges_kritz: u32,
+    pub charges_quickfix: u32,
     // TODO:
-    // pub charges_uber: u32,
-    // pub charges_kritz: u32,
     // pub charges_vacc: u32,
-    // pub charges_quickfix: u32,
     // pub avg_uber_length: u32,
     // pub major_adv_lost: u32,
     // pub biggest_adv_lost: u32,
@@ -426,6 +432,30 @@ impl PlayerSummary {
         self.stats.handle_healing(round_state, amount);
         self.class_stats().handle_healing(round_state, amount);
     }
+
+    // Uber/Kritz/Quickfix
+    //
+    // TODO: Vaccinator.... find an indicative prop or maybe check
+    // "lost ~0.25 and gained a resist type in the same tick"? But
+    // vacc rarely takes 0.5 when activated(!?) and also lots of other
+    // weird edge cases like if hit by a pomson while switching or if
+    // popping vacc while headed by another vacc. See if there is an
+    // indicative anim event or sound effect?
+    fn handle_charged(&mut self, _medigun: &WeaponState, medigun_item: &Item) {
+        let charge_type = medigun_item
+            .attributes
+            .iter()
+            .find(|a| a.class == "set_charge_type")
+            .map(|a| a.value)
+            .unwrap_or(0.0);
+
+        match charge_type {
+            0.0 => self.healing.charges_uber += 1,
+            1.0 => self.healing.charges_kritz += 1,
+            2.0 => self.healing.charges_quickfix += 1,
+            x => error!("Unknown medigun charge type: {}", x),
+        }
+    }
 }
 
 impl<'a> MatchAnalyzer<'a> {
@@ -444,6 +474,7 @@ impl<'a> MatchAnalyzer<'a> {
             span: Default::default(),
             tick: Default::default(),
             server_tick: Default::default(),
+            tick_events: Default::default(),
         }
     }
 
@@ -514,6 +545,8 @@ impl<'a> MatchAnalyzer<'a> {
 
         const MEDIGUN_CHARGE_LEVEL: SendPropIdentifier =
             SendPropIdentifier::new("DT_TFWeaponMedigunDataNonLocal", "m_flChargeLevel");
+        const MEDIGUN_CHARGE_RELEASED: SendPropIdentifier =
+            SendPropIdentifier::new("DT_WeaponMedigun", "m_bChargeRelease");
         const SELF_HANDLE: SendPropIdentifier =
             SendPropIdentifier::new("DT_AttributeContainer", "m_hOuter");
         const ITEM_DEFINITION: SendPropIdentifier =
@@ -521,11 +554,15 @@ impl<'a> MatchAnalyzer<'a> {
 
         let mut handle: Option<u32> = None;
         let mut charge: Option<f32> = None;
+        let mut charge_released: Option<bool> = None;
         let mut id: Option<u32> = None;
         for prop in packet.props(parser_state) {
             match (prop.identifier, &prop.value) {
                 (MEDIGUN_CHARGE_LEVEL, &SendPropValue::Float(z)) => {
                     charge = Some(z);
+                }
+                (MEDIGUN_CHARGE_RELEASED, &SendPropValue::Integer(b)) => {
+                    charge_released = Some(b == 1)
                 }
                 (SELF_HANDLE, &SendPropValue::Integer(h)) => handle = Some(h as u32),
                 (ITEM_DEFINITION, &SendPropValue::Integer(x)) => id = Some(x as u32),
@@ -544,6 +581,12 @@ impl<'a> MatchAnalyzer<'a> {
             let wep = self.weapon_handles.entry(handle).or_default();
             if let Some(charge) = charge {
                 wep.charge = charge;
+            }
+            if let Some(charge_released) = charge_released {
+                if charge_released && wep.charge_released == false {
+                    self.tick_events.push(Event::MedigunCharged(handle));
+                }
+                wep.charge_released = charge_released;
             }
             if let Some(id) = id {
                 wep.id = id;
@@ -925,6 +968,9 @@ impl<'a> MatchAnalyzer<'a> {
             return;
         };
 
+        // Hacky: Update charge in time for handle_death, we should
+        // just do this more broadly and move the death event to
+        // on_tick
         if victim.class == Class::Medic {
             let medigun_h = victim.weapon_handles[1];
             if let Some(medigun) = self.weapon_handles.get(&medigun_h) {
@@ -1091,6 +1137,35 @@ impl<'a> MatchAnalyzer<'a> {
                     error!("could not find weapon handle {:?}", v.active_weapon_handle);
                     continue;
                 };
+            }
+        }
+
+        for e in self.tick_events.drain(..) {
+            match e {
+                Event::MedigunCharged(handle) => {
+                    if let Some(uid) = self.weapon_owners.get(&handle) {
+                        if let Some(player) = self.state.player_summaries.get_mut(uid) {
+                            if let Some(medigun) = self.weapon_handles.get(&handle) {
+                                if let Some(item) = self.schema.get(&medigun.id) {
+                                    player.handle_charged(medigun, item);
+                                } else {
+                                    error!(
+                                        "Med charged with an unknown medigun defindex: {}",
+                                        medigun.id
+                                    );
+                                }
+                            } else {
+                                error!("Med charged without a secondary {handle}");
+                            }
+                        } else {
+                            error!(
+                                "Invalid owner uid {uid} for medigun {handle} when it was charged"
+                            );
+                        }
+                    } else {
+                        error!("No owner for medigun {handle} when it was charged");
+                    };
+                }
             }
         }
     }
