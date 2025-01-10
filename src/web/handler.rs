@@ -1,6 +1,6 @@
-use crate::parser;
+use crate::{parser, schema::Schema};
 use actix_multipart::form::{tempfile::TempFile, MultipartForm};
-use actix_web::{HttpResponse, Responder};
+use actix_web::{web, HttpResponse, Responder};
 use std::io::Read;
 use tracing::error;
 
@@ -10,7 +10,10 @@ pub struct UploadForm {
     file: TempFile,
 }
 
-pub async fn save_files(MultipartForm(mut form): MultipartForm<UploadForm>) -> impl Responder {
+pub async fn save_files(
+    MultipartForm(mut form): MultipartForm<UploadForm>,
+    schema: web::Data<Schema>,
+) -> impl Responder {
     let mut buffer = Vec::new();
 
     match form.file.file.read_to_end(&mut buffer) {
@@ -21,7 +24,7 @@ pub async fn save_files(MultipartForm(mut form): MultipartForm<UploadForm>) -> i
         }
     };
 
-    let mut output = match parser::parse(&buffer) {
+    let mut output = match parser::parse(&buffer, &schema) {
         Ok(o) => o,
         Err(e) => {
             error!("Failed to parse upload {:?}", e);

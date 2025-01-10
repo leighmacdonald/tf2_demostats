@@ -1,9 +1,12 @@
-use crate::parser::{
-    game::{
-        DamageType, Death, PlayerCondition, RoundState, ENTITY_IN_WATER, ENTITY_ON_GROUND,
-        INVALID_HANDLE,
+use crate::{
+    parser::{
+        game::{
+            DamageType, Death, PlayerCondition, RoundState, ENTITY_IN_WATER, ENTITY_ON_GROUND,
+            INVALID_HANDLE,
+        },
+        weapon::Weapon,
     },
-    weapon::Weapon,
+    schema::{Item, Schema},
 };
 use enumset::EnumSet;
 use serde::{Deserialize, Serialize};
@@ -66,11 +69,12 @@ pub struct PlayerDeath {}
 pub struct WeaponState {
     pub class: String,
     pub charge: f32,
+    pub charge_released: bool,
     pub id: u32,
 }
 
-#[derive(Debug, Default)]
-pub struct MatchAnalyzer {
+#[derive(Debug)]
+pub struct MatchAnalyzer<'a> {
     state: DemoSummary,
     user_entities: HashMap<EntityId, UserId>,
     user_handles: HashMap<u32, UserId>,
@@ -83,6 +87,7 @@ pub struct MatchAnalyzer {
     span: Option<EnteredSpan>,
     tick: DemoTick,
     server_tick: u32,
+    schema: &'a Schema,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -423,9 +428,23 @@ impl PlayerSummary {
     }
 }
 
-impl MatchAnalyzer {
-    pub fn new() -> Self {
-        Self::default()
+impl<'a> MatchAnalyzer<'a> {
+    pub fn new(schema: &'a Schema) -> Self {
+        Self {
+            schema,
+            state: Default::default(),
+            user_entities: Default::default(),
+            user_handles: Default::default(),
+            weapon_owners: Default::default(),
+            weapon_handles: Default::default(),
+            entity_handles: Default::default(),
+            users: Default::default(),
+            waiting_for_players: Default::default(),
+            round_state: Default::default(),
+            span: Default::default(),
+            tick: Default::default(),
+            server_tick: Default::default(),
+        }
     }
 
     fn parse_user_info(
@@ -1077,7 +1096,7 @@ impl MatchAnalyzer {
     }
 }
 
-impl MessageHandler for MatchAnalyzer {
+impl MessageHandler for MatchAnalyzer<'_> {
     type Output = DemoSummary;
 
     fn does_handle(message_type: MessageType) -> bool {
