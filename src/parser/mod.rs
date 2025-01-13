@@ -4,8 +4,7 @@ mod weapon;
 
 use serde::{Deserialize, Serialize};
 use summarizer::DemoSummary;
-use tf_demo_parser::demo::header::Header;
-use tf_demo_parser::{Demo, DemoParser};
+use tf_demo_parser::{demo::header::Header, Demo, DemoParser};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DemoOutput {

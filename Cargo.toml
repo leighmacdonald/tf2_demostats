@@ -25,9 +25,11 @@ actix-web = "4.9"
 actix-multipart = "0.7.2"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-tf-demo-parser = { version = "0.5.1", features = ["tracing"] }
+tf-demo-parser = { version = "0.5.1", features = ["trace"] }
 fnv = "1.0.7"
 tokio = { version = "1.24.2", features = ["rt", "rt-multi-thread", "macros"] }
 serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.134"
 num_enum = "0.7.3"
+bit-set = "0.8.0"
+enumset = "1.1.5"
