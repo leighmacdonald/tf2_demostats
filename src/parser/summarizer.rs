@@ -34,7 +34,7 @@ use tf_demo_parser::{
     },
     MessageType, ParserState, ReadResult, Stream,
 };
-use tracing::{debug, error, error_span, info, span::EnteredSpan, trace};
+use tracing::{debug, error, error_span, info, span::EnteredSpan, trace, warn};
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlayerMeta {
@@ -74,7 +74,9 @@ pub struct MatchAnalyzer {
     state: DemoSummary,
     user_entities: HashMap<EntityId, UserId>,
     user_handles: HashMap<u32, UserId>,
+    weapon_owners: HashMap<u32, UserId>,
     weapon_handles: HashMap<u32, WeaponState>,
+    entity_handles: HashMap<EntityId, u32>, // Entity -> Handle lookup
     users: BTreeMap<UserId, PlayerMeta>,
     waiting_for_players: bool,
     round_state: RoundState,
@@ -90,18 +92,23 @@ pub struct Killstreak {
     pub duration: u32,
 }
 
+// Med specific stats
 #[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct HealersSummary {
+    pub preround_healing: u32,
     pub healing: u32,
-    pub charges_uber: u32,
-    pub charges_kritz: u32,
-    pub charges_vacc: u32,
-    pub charges_quickfix: u32,
+    pub postround_healing: u32,
+
     pub drops: u32,
     pub near_full_charge_death: u32,
-    pub avg_uber_length: u32,
-    pub major_adv_lost: u32,
-    pub biggest_adv_lost: u32,
+    // TODO:
+    // pub charges_uber: u32,
+    // pub charges_kritz: u32,
+    // pub charges_vacc: u32,
+    // pub charges_quickfix: u32,
+    // pub avg_uber_length: u32,
+    // pub major_adv_lost: u32,
+    // pub biggest_adv_lost: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -112,6 +119,11 @@ pub struct Stats {
     pub postround_kills: u32,
     pub postround_assists: u32,
     pub postround_deaths: u32,
+
+    // Dupes with HealersSummary to cover non-med healing
+    pub preround_healing: u32,
+    pub healing: u32,
+    pub postround_healing: u32,
 
     pub damage: u32, // Added up PlayerHurt events
     pub damage_taken: u32,
@@ -238,6 +250,20 @@ impl Stats {
             self.headshot_kills += 1;
         }
     }
+
+    pub fn handle_healing(&mut self, round_state: RoundState, amount: u32) {
+        if round_state == RoundState::TeamWin {
+            return;
+        }
+
+        if round_state == RoundState::PreRound {
+            self.preround_healing += amount;
+        } else if round_state == RoundState::TeamWin {
+            self.postround_healing += amount;
+        } else {
+            self.healing += amount;
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -274,20 +300,18 @@ pub struct PlayerSummary {
 
     pub scoreboard_damage: Option<u32>,
 
-    // TODO
-    pub healing_taken: u32,
-    pub health_packs: u32,
-    pub healing_packs: u32, // total healing from packs
-    pub extinguishes: u32,
-    pub building_built: u32,
-    pub buildings_destroyed: u32,
-    pub ubercharges: u32,
-    pub teleports: u32,
-    pub support: u32,
-
     pub healing: HealersSummary,
+
+    // TODO
+    //pub healing_taken: u32,
+    //pub health_packs: u32,
+    //pub healing_packs: u32, // total healing from packs
+    //pub extinguishes: u32,
+    //pub building_built: u32,
+    //pub buildings_destroyed: u32,
+    //pub teleports: u32,
     //pub support: u32,
-    pub killstreaks: Vec<Killstreak>,
+    //pub killstreaks: Vec<Killstreak>,
 
     // Flags for internal state tracking but unused elsewhere
     #[serde(skip)]
@@ -300,6 +324,12 @@ pub struct PlayerSummary {
     class: Class,
     #[serde(skip)]
     health: u32,
+
+    // Temporary stat for tracking healing score changes, not the
+    // actual stat
+    #[serde(skip)]
+    scoreboard_healing: u32,
+
     #[serde(skip)]
     sim_time: u32,
     #[serde(skip)]
@@ -314,6 +344,12 @@ pub struct PlayerSummary {
     handle: u32,
     #[serde(skip)]
     active_weapon_handle: u32,
+    #[serde(skip)]
+    weapon_handles: Box<[u32; 7]>,
+    #[serde(skip)]
+    charge: f32, // ie med charge -- not wired to always be up to date!
+    #[serde(skip)]
+    kritzed: bool,
 }
 
 impl PlayerSummary {
@@ -361,8 +397,29 @@ impl PlayerSummary {
     }
 
     fn handle_death(&mut self, round_state: RoundState, flags: EnumSet<Death>) {
+        if self.class == Class::Medic && round_state == RoundState::Running {
+            if self.charge == 1.0 {
+                self.healing.drops += 1;
+            } else if self.charge > 0.95 {
+                self.healing.near_full_charge_death += 1;
+            }
+        }
+
         self.stats.handle_death(round_state, flags);
         self.class_stats().handle_death(round_state, flags);
+    }
+
+    fn handle_healing(&mut self, round_state: RoundState, amount: u32) {
+        if round_state == RoundState::PreRound {
+            self.healing.preround_healing += amount;
+        } else if round_state == RoundState::TeamWin {
+            self.healing.postround_healing += amount;
+        } else {
+            self.healing.healing += amount;
+        }
+
+        self.stats.handle_healing(round_state, amount);
+        self.class_stats().handle_healing(round_state, amount);
     }
 }
 
@@ -456,7 +513,15 @@ impl MatchAnalyzer {
                 _ => {}
             }
         }
+
+        let mut existing_handle = self.entity_handles.get(&packet.entity_index).copied();
+
         if let Some(handle) = handle {
+            self.entity_handles.insert(packet.entity_index, handle);
+            existing_handle = Some(handle);
+        }
+
+        if let Some(handle) = existing_handle {
             let wep = self.weapon_handles.entry(handle).or_default();
             if let Some(charge) = charge {
                 wep.charge = charge;
@@ -465,6 +530,10 @@ impl MatchAnalyzer {
                 wep.id = id;
             }
             wep.class = class.name.to_string();
+        } else {
+            if charge.is_some() {
+                error!("Could not find weapon handle for medigun {packet:?}");
+            }
         }
     }
 
@@ -512,11 +581,25 @@ impl MatchAnalyzer {
         const COND_3: SendPropIdentifier =
             SendPropIdentifier::new("DT_TFPlayerShared", "m_nPlayerCondEx3");
 
-        const ACTIVE_WEAPON_HANDLE: SendPropIdentifier =
-            SendPropIdentifier::new("DT_BaseCombatCharacter", "m_hActiveWeapon");
+        // Separate condition bits
+        // TODO: seems to only be used for Kritzkreig?
+        const COND_BITS: SendPropIdentifier =
+            SendPropIdentifier::new("DT_TFPlayerConditionListExclusive", "_condition_bits");
 
         const COND_SOURCE: SendPropIdentifier =
             SendPropIdentifier::new("DT_TFPlayerConditionSource", "m_pProvider");
+
+        const ACTIVE_WEAPON_HANDLE: SendPropIdentifier =
+            SendPropIdentifier::new("DT_BaseCombatCharacter", "m_hActiveWeapon");
+
+        const WEP_0: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "000");
+        const WEP_1: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "001");
+        const WEP_2: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "002");
+        const WEP_3: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "003");
+        const WEP_4: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "004");
+        const WEP_5: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "005");
+        const WEP_6: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "006");
+        const WEP_7: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "007");
 
         let entity_id = &entity.entity_index;
         let Some(user_id) = self.user_entities.get(entity_id) else {
@@ -592,12 +675,59 @@ impl MatchAnalyzer {
                 (COND_2, &SendPropValue::Integer(x)) => summary.update_cond::<64>(x as u32),
                 (COND_3, &SendPropValue::Integer(x)) => summary.update_cond::<96>(x as u32),
 
+                (COND_BITS, &SendPropValue::Integer(x)) => {
+                    if x == 0 || x == 2048 {
+                        summary.kritzed = x == 2048;
+                    } else {
+                        error!("Unknown _condition_bits: {x}");
+                    }
+                }
+
                 (ACTIVE_WEAPON_HANDLE, &SendPropValue::Integer(x)) => {
-                    if x as u32 == INVALID_HANDLE {
+                    let h = x as u32;
+                    if h == INVALID_HANDLE {
                         continue;
                     }
-                    summary.active_weapon_handle = x as u32;
+                    summary.active_weapon_handle = h;
+                    self.weapon_owners.insert(h, *user_id);
                 }
+
+                (WEP_0, &SendPropValue::Integer(x)) => {
+                    let handle = x as u32;
+                    summary.weapon_handles[0] = handle;
+                    self.weapon_owners.insert(handle, *user_id);
+                }
+                (WEP_1, &SendPropValue::Integer(x)) => {
+                    let handle = x as u32;
+                    summary.weapon_handles[1] = handle;
+                    self.weapon_owners.insert(handle, *user_id);
+                }
+                (WEP_2, &SendPropValue::Integer(x)) => {
+                    let handle = x as u32;
+                    summary.weapon_handles[2] = handle;
+                    self.weapon_owners.insert(handle, *user_id);
+                }
+                (WEP_3, &SendPropValue::Integer(x)) => {
+                    let handle = x as u32;
+                    summary.weapon_handles[3] = handle;
+                    self.weapon_owners.insert(handle, *user_id);
+                }
+                (WEP_4, &SendPropValue::Integer(x)) => {
+                    let handle = x as u32;
+                    summary.weapon_handles[4] = handle;
+                    self.weapon_owners.insert(handle, *user_id);
+                }
+                (WEP_5, &SendPropValue::Integer(x)) => {
+                    let handle = x as u32;
+                    summary.weapon_handles[5] = handle;
+                    self.weapon_owners.insert(handle, *user_id);
+                }
+                (WEP_6, &SendPropValue::Integer(x)) => {
+                    let handle = x as u32;
+                    summary.weapon_handles[6] = handle;
+                    self.weapon_owners.insert(handle, *user_id);
+                }
+                (WEP_7, &SendPropValue::Integer(_)) => error!("Unexpected 8th weapons"),
 
                 _ => {
                     trace!("Unhandled player ({}) entity prop {prop:?}", summary.name);
@@ -620,8 +750,29 @@ impl MatchAnalyzer {
                         match table_name.as_str() {
                             "m_iTeam" => {}
                             "m_iHealing" => {
-                                player.healing.healing =
-                                    i64::try_from(&prop.value).unwrap_or_default() as u32;
+                                let hi = i64::try_from(&prop.value).unwrap_or_default();
+                                if hi < 0 {
+                                    error!("Negative healing of {hi} by {}", player.name);
+                                    return;
+                                }
+                                let h = hi as u32;
+
+                                // Skip the first real value; sometimes STV starts a little late and we can't distinguish the healing values.
+                                if player.scoreboard_healing == 0 {
+                                    player.scoreboard_healing = h;
+                                    return;
+                                }
+
+                                // Add up deltas, as this tracker resets to 0 mid round.
+                                let dh = h.saturating_sub(player.scoreboard_healing);
+                                if dh > 300 {
+                                    // Never saw a delta this large in our corpus; may be a sign of a miscount
+                                    warn!("Huge healing delta of {dh} by {}", player.name);
+                                }
+
+                                player.handle_healing(self.round_state, dh);
+
+                                player.scoreboard_healing = h;
                             }
                             "m_iTotalScore" => {
                                 player.points =
@@ -754,6 +905,16 @@ impl MatchAnalyzer {
             error!("Unknown victim id: {}", death.user_id);
             return;
         };
+
+        if victim.class == Class::Medic {
+            let medigun_h = victim.weapon_handles[1];
+            if let Some(medigun) = self.weapon_handles.get(&medigun_h) {
+                victim.charge = medigun.charge;
+            } else {
+                error!("Med died without a secondary {medigun_h}");
+            }
+        }
+
         victim.handle_death(self.round_state, flags);
 
         // TODO: Tune this definition. Suppstats uses "distance from

@@ -12,7 +12,7 @@ pub enum RoundState {
     Pregame = 1,
     StartGame = 2,
     PreRound = 3,
-    RoundRunning = 4,
+    Running = 4,
     TeamWin = 5,
     Restart = 6,
     Stalemate = 7,
@@ -302,7 +302,7 @@ pub enum PlayerCondition {
     InvulnerableWearingOff = 8,
     StealthedBlink = 9,
     SelectedToTeleport = 10,
-    CritBoosted = 11, // Kritz and Revenge Crits
+    CritBoosted = 11, // unused? see the other variants; and kritz seems to be on _condition_bits
     TemporaryDamageBonus = 12,
     FeignDeath = 13,
     Phase = 14,
