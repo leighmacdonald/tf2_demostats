@@ -2,6 +2,7 @@ mod game;
 pub mod summarizer;
 mod weapon;
 
+use crate::schema::Schema;
 use serde::{Deserialize, Serialize};
 use summarizer::DemoSummary;
 use tf_demo_parser::{demo::header::Header, Demo, DemoParser};
@@ -17,9 +18,9 @@ pub struct DemoOutput {
     pub summary: DemoSummary,
 }
 
-pub fn parse(buffer: &[u8]) -> tf_demo_parser::Result<DemoOutput> {
+pub fn parse(buffer: &[u8], schema: &Schema) -> tf_demo_parser::Result<DemoOutput> {
     let demo = Demo::new(buffer);
-    let handler = summarizer::MatchAnalyzer::new();
+    let handler = summarizer::MatchAnalyzer::new(schema);
     let stream = demo.get_stream();
     let parser = DemoParser::new_with_analyser(stream, handler);
 

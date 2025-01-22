@@ -23,7 +23,7 @@ path = "src/bin/cli.rs"
 [dependencies]
 actix-web = "4.9"
 actix-multipart = "0.7.2"
-tracing = "0.1.41"
+tracing = { version = "0.1.41", features = ["release_max_level_warn"] }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 tf-demo-parser = { version = "0.5.1", features = ["trace"] }
 fnv = "1.0.7"
