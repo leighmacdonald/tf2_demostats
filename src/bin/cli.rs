@@ -1,21 +1,17 @@
 use std::{env, path};
-use tf2_demostats::{parser, schema};
+use tf2_demostats::{parser, schema, Result};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-#[tokio::main]
-async fn main() -> std::io::Result<()> {
+#[actix_web::main]
+async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(fmt::layer().without_time().with_target(false))
         .with(EnvFilter::from_default_env())
         .init();
 
-    let multiple_files = env::args().len() > 2;
+    let schema = schema::fetch().await?;
 
-    let schema_string = std::env::var("TF2_SCHEMA_PATH")
-        .expect("TF2_SCHEMA_PATH must be set")
-        .to_string();
-    let schema_path = path::Path::new(&schema_string);
-    let schema = schema::parse(schema_path)?;
+    let multiple_files = env::args().len() > 2;
 
     for arg in env::args().skip(1) {
         let path = path::Path::new(&arg);

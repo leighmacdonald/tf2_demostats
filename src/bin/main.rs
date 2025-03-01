@@ -1,8 +1,8 @@
 use actix_multipart::form::tempfile::TempFileConfig;
 use actix_multipart::form::MultipartFormConfig;
 use actix_web::{error, middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer};
-use std::{env, fs, path};
-use tf2_demostats::{schema, web::handler};
+use std::{env, fs};
+use tf2_demostats::{schema, web::handler, Result};
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -12,7 +12,7 @@ fn handle_multipart_error(err: actix_multipart::MultipartError, _req: &HttpReque
 }
 
 #[actix_web::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> Result<()> {
     let host = env::var("DEMO_HOST").unwrap_or_else(|_e| String::from("0.0.0.0"));
     let port = env::var("DEMO_PORT")
         .unwrap_or_else(|_e| String::from("8811"))
@@ -25,18 +25,11 @@ async fn main() -> std::io::Result<()> {
         .with(EnvFilter::from_default_env())
         .init();
 
-    let schema_string = std::env::var("DEMO_TF2_SCHEMA_PATH")
-        .or(std::env::var("TF2_SCHEMA_PATH"))
-        .expect("DEMO_TF2_SCHEMA_PATH must be set")
-        .to_string();
-    let schema_path = path::Path::new(&schema_string);
-    let schema = schema::parse(schema_path)?;
-    info!("Loaded TF2 schema from {}", &schema_string);
-
+    let schema = schema::fetch().await?;
     let schema_data = web::Data::new(schema);
 
     info!("Starting HTTP Service on {}:{}", &host, &port);
-    HttpServer::new(move || {
+    let _ = HttpServer::new(move || {
         App::new()
             .wrap(middleware::Compress::default())
             .wrap(middleware::Logger::default())
@@ -60,5 +53,7 @@ async fn main() -> std::io::Result<()> {
         bind((host, port))?.
         //workers(4). // TODO Add env var
         run().
-        await
+        await;
+
+    Ok(())
 }
