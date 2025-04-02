@@ -293,7 +293,7 @@ struct ApiResponse<T> {
 
 async fn fetch_bytes() -> Result<String> {
     let schema_path_var = std::env::var("TF2_SCHEMA_PATH").or(env::var("DEMO_TF2_SCHEMA_PATH"));
-    if let Some(schema_string) = schema_path_var.ok() {
+    if let Ok(schema_string) = schema_path_var {
         let schema_path = std::path::Path::new(&schema_string);
         return Ok(std::fs::read_to_string(schema_path)
             .map_err(|e| format!("Error {e}: While reading {schema_path:?}"))?);
