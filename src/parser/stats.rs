@@ -59,6 +59,11 @@ pub struct Stats {
     pub backstabs: u32,
 
     #[serde(skip_serializing_if = "is_zero")]
+    pub captures: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub captures_blocked: u32,
+
+    #[serde(skip_serializing_if = "is_zero")]
     pub was_headshot: u32,
     #[serde(skip_serializing_if = "is_zero")]
     pub was_backstabbed: u32,
@@ -166,6 +171,14 @@ impl Stats {
         } else if damage_type == DamageType::Headshot {
             self.headshot_kills += 1;
         }
+    }
+
+    pub fn handle_capture(&mut self) {
+        self.captures += 1;
+    }
+
+    pub fn handle_capture_blocked(&mut self) {
+        self.captures_blocked += 1;
     }
 
     pub fn handle_healing(&mut self, round_state: RoundState, amount: u32) {
