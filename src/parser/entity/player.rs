@@ -391,6 +391,9 @@ impl Entity for Player {
             return;
         };
         trace!("Player left {self:?}");
+        if summary.tick_end.is_some() {
+            error!("Player left twice?");
+        }
         summary.tick_end = Some(game.tick);
     }
 

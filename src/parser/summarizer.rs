@@ -56,6 +56,7 @@ use tracing::{debug, error, span::EnteredSpan, trace, warn};
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct DemoSummary {
     pub players: Vec<PlayerSummary>,
+    pub rounds: Vec<RoundSummary>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -92,6 +93,8 @@ pub struct Hurt {
 }
 
 pub struct MatchAnalyzer<'a> {
+    current_round: RoundSummary,
+    rounds: Vec<RoundSummary>,
     player_summaries: HashMap<UserId, PlayerSummary>,
     user_entities: HashMap<EntityId, UserId>, // entity_id -> user_id
     weapon_owners: HashMap<u32, UserId>,
@@ -208,11 +211,29 @@ impl HealersSummary {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
+pub struct RoundSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub winner: Option<Team>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub is_stalemate: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub is_sudden_death: bool,
+
+    pub time: f32, // in seconds
+
+    pub mvps: Vec<String>, // steamids
+
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub winners: Vec<String>, // steamids
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub losers: Vec<String>, // steamids
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct PlayerSummary {
     pub name: String,
     pub steamid: String,
 
-    pub team: Team,
     pub tick_start: Option<DemoTick>,
     pub tick_end: Option<DemoTick>,
     pub points: Option<u32>,
@@ -274,6 +295,8 @@ pub struct PlayerSummary {
     pub is_replay: bool,
 
     // Flags for internal state tracking but unused elsewhere
+    #[serde(skip)]
+    pub team: Team,
     #[serde(skip)]
     pub entity_id: EntityId,
     #[serde(skip)]
@@ -389,6 +412,16 @@ impl PlayerSummary {
         self.class_stats().handle_healing(round_state, amount);
     }
 
+    fn handle_capture(&mut self) {
+        self.stats.handle_capture();
+        self.class_stats().handle_capture();
+    }
+
+    fn handle_capture_blocked(&mut self) {
+        self.stats.handle_capture_blocked();
+        self.class_stats().handle_capture_blocked();
+    }
+
     // Uber/Kritz/Quickfix
     //
     // TODO: Vaccinator.... find an indicative prop or maybe check
@@ -420,6 +453,8 @@ impl<'a> MatchAnalyzer<'a> {
     pub fn new(schema: &'a Schema) -> Self {
         Self {
             schema,
+            current_round: Default::default(),
+            rounds: Default::default(),
             player_summaries: Default::default(),
             user_entities: Default::default(),
             weapon_owners: Default::default(),
@@ -907,88 +942,88 @@ impl<'a> MatchAnalyzer<'a> {
             };
 
             if let Ok(player_id) = prop_name.as_str().parse::<u32>() {
+                let round_state = self.round_state;
+
                 let entity_id = EntityId::from(player_id);
-                if let Some(user_id) = self.user_entities.get(&entity_id) {
-                    if let Some(player) = self.player_summaries.get_mut(user_id) {
-                        match table_name.as_str() {
-                            "m_iTeam" => {}
-                            "m_iHealing" => {
-                                let hi = i64::try_from(&prop.value).unwrap_or_default();
-                                if hi < 0 {
-                                    error!("Negative healing of {hi} by {}", player.name);
-                                    return;
-                                }
-                                let h = hi as u32;
+                if let Some(player) = self.get_player_summary_mut(&entity_id) {
+                    match table_name.as_str() {
+                        "m_iTeam" => {}
+                        "m_iHealing" => {
+                            let hi = i64::try_from(&prop.value).unwrap_or_default();
+                            if hi < 0 {
+                                error!("Negative healing of {hi} by {}", player.name);
+                                return;
+                            }
+                            let h = hi as u32;
 
-                                // Skip the first real value; sometimes STV starts a little late and
-                                // we can't distinguish the healing values.
-                                if player.scoreboard_healing == 0 {
-                                    player.scoreboard_healing = h;
-                                    return;
-                                }
-
-                                // Add up deltas, as this tracker resets to 0 mid round.
-                                let dh = h.saturating_sub(player.scoreboard_healing);
-                                if dh > 300 {
-                                    // Never saw a delta this large in our corpus; may be a sign of
-                                    // a miscount
-                                    warn!("Huge healing delta of {dh} by {}", player.name);
-                                }
-
-                                player.handle_healing(self.round_state, dh);
-
+                            // Skip the first real value; sometimes STV starts a little late and
+                            // we can't distinguish the healing values.
+                            if player.scoreboard_healing == 0 {
                                 player.scoreboard_healing = h;
+                                return;
                             }
-                            "m_iTotalScore" => {
-                                player.points =
-                                    Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
+
+                            // Add up deltas, as this tracker resets to 0 mid round.
+                            let dh = h.saturating_sub(player.scoreboard_healing);
+                            if dh > 300 {
+                                // Never saw a delta this large in our corpus; may be a sign of
+                                // a miscount
+                                warn!("Huge healing delta of {dh} by {}", player.name);
                             }
-                            "m_iDamage" => {
-                                player.scoreboard_damage =
-                                    Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
-                            }
-                            "m_iDeaths" => {
-                                player.scoreboard_deaths =
-                                    Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
-                            }
-                            "m_iScore" => {
-                                // iScore is close to number of kills; but counts post-game kills and decrements on suicide.
-                                player.scoreboard_kills =
-                                    Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
-                            }
-                            "m_iBonusPoints" => {
-                                player.bonus_points =
-                                    Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
-                            }
-                            "m_iPlayerClass" => {}
-                            "m_iPlayerLevel" => {}
-                            "m_bAlive" => {}
-                            "m_flNextRespawnTime" => {}
-                            "m_iActiveDominations" => {}
-                            "m_iDamageAssist" => {}
-                            "m_iPing" => {}
-                            "m_iChargeLevel" => {}
-                            "m_iStreaks" => {}
-                            "m_iHealth" => {}
-                            "m_iMaxHealth" => {}
-                            "m_iMaxBuffedHealth" => {}
-                            "m_iPlayerClassWhenKilled" => {}
-                            "m_bValid" => {}
-                            "m_iUserID" => {}
-                            "m_iConnectionState" => {}
-                            "m_flConnectTime" => {}
-                            "m_iDamageBoss" => {}
-                            "m_bArenaSpectator" => {}
-                            "m_iHealingAssist" => {}
-                            "m_iBuybackCredits" => {}
-                            "m_iUpgradeRefundCredits" => {}
-                            "m_iCurrencyCollected" => {}
-                            "m_iDamageBlocked" => {}
-                            "m_iAccountID" => {}
-                            "m_bConnected" => {}
-                            x => {
-                                error!("Unhandled player resource type: {x}");
-                            }
+
+                            player.handle_healing(round_state, dh);
+
+                            player.scoreboard_healing = h;
+                        }
+                        "m_iTotalScore" => {
+                            player.points =
+                                Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
+                        }
+                        "m_iDamage" => {
+                            player.scoreboard_damage =
+                                Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
+                        }
+                        "m_iDeaths" => {
+                            player.scoreboard_deaths =
+                                Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
+                        }
+                        "m_iScore" => {
+                            // iScore is close to number of kills; but counts post-game kills and decrements on suicide.
+                            player.scoreboard_kills =
+                                Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
+                        }
+                        "m_iBonusPoints" => {
+                            player.bonus_points =
+                                Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
+                        }
+                        "m_iPlayerClass" => {}
+                        "m_iPlayerLevel" => {}
+                        "m_bAlive" => {}
+                        "m_flNextRespawnTime" => {}
+                        "m_iActiveDominations" => {}
+                        "m_iDamageAssist" => {}
+                        "m_iPing" => {}
+                        "m_iChargeLevel" => {}
+                        "m_iStreaks" => {}
+                        "m_iHealth" => {}
+                        "m_iMaxHealth" => {}
+                        "m_iMaxBuffedHealth" => {}
+                        "m_iPlayerClassWhenKilled" => {}
+                        "m_bValid" => {}
+                        "m_iUserID" => {}
+                        "m_iConnectionState" => {}
+                        "m_flConnectTime" => {}
+                        "m_iDamageBoss" => {}
+                        "m_bArenaSpectator" => {}
+                        "m_iHealingAssist" => {}
+                        "m_iBuybackCredits" => {}
+                        "m_iUpgradeRefundCredits" => {}
+                        "m_iCurrencyCollected" => {}
+                        "m_iDamageBlocked" => {}
+                        "m_iAccountID" => {}
+                        "m_bConnected" => {}
+                        x => {
+                            error!("Unhandled player resource type: {x}");
                         }
                     }
                 }
@@ -1213,39 +1248,40 @@ impl<'a> MatchAnalyzer<'a> {
         }
     }
 
+    fn get_player_summary(&self, eid: &EntityId) -> Option<&PlayerSummary> {
+        self.user_entities
+            .get(eid)
+            .and_then(|uid| self.player_summaries.get(uid))
+    }
+
+    fn get_player_summary_mut(&mut self, eid: &EntityId) -> Option<&mut PlayerSummary> {
+        self.user_entities
+            .get(eid)
+            .and_then(|uid| self.player_summaries.get_mut(uid))
+    }
+
     pub fn handle_point_captured(&mut self, cap: &TeamPlayPointCapturedEvent) {
-        trace!("Point Captures {:?}", cap);
+        trace!("Point captured {:?}", cap);
 
         for entity_id in cap.cappers.as_bytes() {
-            let Some(uid) = self.user_entities.get(&EntityId::from(*entity_id as u32)) else {
-                error!("Unknown entity id {entity_id} in capture event");
-                continue;
-            };
-
-            let Some(summary) = self.player_summaries.get_mut(uid) else {
-                error!("Unknown uid {uid} from entity id {entity_id} in capture event");
-                continue;
-            };
-            debug!("Capture by {}", summary.name);
-            summary.captures += 1;
+            let eid = EntityId::from(*entity_id as u32);
+            if let Some(player) = self.get_player_summary_mut(&eid) {
+                player.handle_capture();
+            } else {
+                error!("Could not lookup player with entity id {eid} in capture event");
+            }
         }
     }
 
     pub fn handle_capture_blocked(&mut self, cap: &TeamPlayCaptureBlockedEvent) {
         trace!("Capture blocked {:?}", cap);
 
-        let entity_id = EntityId::from(cap.blocker as u32);
-        let Some(uid) = self.user_entities.get(&entity_id) else {
-            error!("Unknown entity id {entity_id} in capture blocked event");
-            return;
-        };
-
-        let Some(summary) = self.player_summaries.get_mut(uid) else {
-            error!("Unknown uid {uid} from entity id {entity_id} in capture blocked event");
-            return;
-        };
-
-        summary.captures_blocked += 1;
+        let eid = EntityId::from(cap.blocker as u32);
+        if let Some(player) = self.get_player_summary_mut(&eid) {
+            player.handle_capture_blocked();
+        } else {
+            error!("Could not lookup player with entity id {eid} in capture blocked event");
+        }
     }
 
     pub fn handle_player_hurt(&mut self, hurt: &PlayerHurtEvent) {
@@ -1652,8 +1688,61 @@ impl MessageHandler for MatchAnalyzer<'_> {
                 GameEvent::PlayerHurt(hurt) => {
                     self.tick_events.push(Event::Hurt(hurt.clone()));
                 }
+
                 GameEvent::TeamPlayPointCaptured(cap) => self.handle_point_captured(cap),
                 GameEvent::TeamPlayCaptureBlocked(block) => self.handle_capture_blocked(block),
+
+                GameEvent::TeamPlayWinPanel(e) => {
+                    for eid in [e.player_1, e.player_2, e.player_3] {
+                        let p = self.get_player_summary(&EntityId::from(eid as u32));
+                        if let Some(p) = p {
+                            self.current_round.mvps.push(p.steamid.clone());
+                        }
+                    }
+                }
+
+                GameEvent::TeamPlayRoundWin(e) => {
+                    let winner = Team::try_from(e.team).unwrap_or_else(|_| {
+                        error!("Unknown team id won round: {}", e.team);
+                        Team::Spectator // Weird, but "Team::Other" is used for stalemates!
+                    });
+
+                    self.current_round.time = e.round_time;
+                    self.current_round.is_sudden_death = e.was_sudden_death != 0;
+
+                    if winner == Team::Red || winner == Team::Blue {
+                        self.current_round.winner = Some(winner);
+
+                        let loser = if winner == Team::Red {
+                            Team::Blue
+                        } else {
+                            Team::Red
+                        };
+
+                        for p in self
+                            .player_summaries
+                            .values()
+                            // ignore players that have left
+                            .filter(|p| p.tick_end.is_none())
+                        {
+                            if p.team == winner {
+                                self.current_round.winners.push(p.steamid.clone());
+                            } else if p.team == loser {
+                                self.current_round.losers.push(p.steamid.clone());
+                            } // else: spec, or never joined a team
+                        }
+                    } else if winner == Team::Other {
+                        self.current_round.is_stalemate = true;
+
+                        for p in self.player_summaries.values().filter(|p| {
+                            p.tick_end.is_none() && (p.team == Team::Red || p.team == Team::Blue)
+                        }) {
+                            self.current_round.losers.push(p.steamid.clone());
+                        }
+                    }
+
+                    self.rounds.push(std::mem::take(&mut self.current_round));
+                }
 
                 // Some STVs demos don't have these events; they are
                 // present in PoV demos and some STV demos (possibly
@@ -1662,6 +1751,12 @@ impl MessageHandler for MatchAnalyzer<'_> {
                 GameEvent::PlayerHealed(heal) => debug!("PlayerHealed {heal:?}"),
                 GameEvent::PlayerInvulned(invuln) => debug!("PlayerDisconnect {invuln:?}"),
                 GameEvent::PlayerChargeDeployed(c) => debug!("PlayerChargeDeployed {c:?}"),
+                // GameEvent::TeamPlayRoundStalemate
+
+                // Uninteresting
+                GameEvent::HLTVStatus(_) => {}
+                GameEvent::TeamPlayBroadcastAudio(_) => {}
+                GameEvent::TeamPlayGameOver(_) => {}
 
                 _ => {
                     trace!("Unhandled game event: {event:?}");
@@ -1762,6 +1857,7 @@ impl MessageHandler for MatchAnalyzer<'_> {
     fn into_output(self, _parser_state: &ParserState) -> <Self as MessageHandler>::Output {
         let mut out = DemoSummary {
             players: self.player_summaries.into_values().collect(),
+            rounds: self.rounds,
         };
 
         // Deterministic output
