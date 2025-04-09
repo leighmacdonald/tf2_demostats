@@ -37,6 +37,7 @@ use tf_demo_parser::{
         message::{
             gameevent::GameEventMessage,
             packetentities::{EntityId, PacketEntity, UpdateType},
+            usermessage::{ChatMessageKind, UserMessage},
             Message, NetTickMessage,
         },
         packet::{
@@ -57,6 +58,22 @@ use tracing::{debug, error, span::EnteredSpan, trace, warn};
 pub struct DemoSummary {
     pub players: Vec<PlayerSummary>,
     pub rounds: Vec<RoundSummary>,
+    pub chat: Vec<ChatMessage>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct ChatMessage {
+    tick: DemoTick,
+    user: String, // steamid
+    message: String,
+    #[serde(skip_serializing_if = "is_false")]
+    is_dead: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    is_team: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    is_spec: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    is_name_change: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -93,6 +110,7 @@ pub struct Hurt {
 }
 
 pub struct MatchAnalyzer<'a> {
+    chat: Vec<ChatMessage>,
     current_round: RoundSummary,
     rounds: Vec<RoundSummary>,
     player_summaries: HashMap<UserId, PlayerSummary>,
@@ -453,6 +471,7 @@ impl<'a> MatchAnalyzer<'a> {
     pub fn new(schema: &'a Schema) -> Self {
         Self {
             schema,
+            chat: Default::default(),
             current_round: Default::default(),
             rounds: Default::default(),
             player_summaries: Default::default(),
@@ -1580,6 +1599,34 @@ impl<'a> MatchAnalyzer<'a> {
 
         self.explosions.clear();
     }
+
+    fn handle_user_message(&mut self, msg: &UserMessage) {
+        match msg {
+            UserMessage::SayText2(msg) => {
+                self.chat.push(ChatMessage {
+                    tick: self.tick,
+                    user: self
+                        .get_player_summary(&msg.client)
+                        .map(|p| p.steamid.clone())
+                        .unwrap_or("".to_string()),
+                    message: msg.text.to_string(),
+                    is_dead: matches!(
+                        msg.kind,
+                        ChatMessageKind::ChatAllDead | ChatMessageKind::ChatTeamDead
+                    ),
+                    is_team: matches!(
+                        msg.kind,
+                        ChatMessageKind::ChatTeam | ChatMessageKind::ChatTeamDead
+                    ),
+                    is_spec: matches!(msg.kind, ChatMessageKind::ChatAllSpec),
+                    is_name_change: matches!(msg.kind, ChatMessageKind::NameChange),
+                });
+            }
+            e => {
+                trace!("Unhandled user message type {e:?}")
+            }
+        }
+    }
 }
 
 impl MessageHandler for MatchAnalyzer<'_> {
@@ -1592,6 +1639,7 @@ impl MessageHandler for MatchAnalyzer<'_> {
                 | MessageType::GameEvent
                 | MessageType::NetTick
                 | MessageType::TempEntities
+                | MessageType::UserMessage
         )
     }
 
@@ -1618,6 +1666,7 @@ impl MessageHandler for MatchAnalyzer<'_> {
                     );
                 }
             }
+            Message::UserMessage(ue) => self.handle_user_message(ue),
             Message::TempEntities(te) => {
                 for e in &te.events {
                     let Some(class) = parser_state
@@ -1858,6 +1907,7 @@ impl MessageHandler for MatchAnalyzer<'_> {
         let mut out = DemoSummary {
             players: self.player_summaries.into_values().collect(),
             rounds: self.rounds,
+            chat: self.chat,
         };
 
         // Deterministic output
