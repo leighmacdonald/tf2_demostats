@@ -54,6 +54,27 @@ pub fn sentry_name(sentry: &entity::Sentry) -> &'static str {
     }
 }
 
+pub fn is_sentry(name: &'static str) -> bool {
+    matches!(
+        name,
+        "obj_minisentry" | "obj_sentrygun" | "obj_sentrygun2" | "obj_sentrygun3"
+    )
+}
+
+pub fn weapon_name(weapon: &schema::Item, class: Class) -> &'static str {
+    weapon
+        .item_logname
+        .as_ref()
+        .map(|s| ustr::ustr(s).as_str())
+        .or(weapon
+            .item_class
+            .as_deref()
+            .map(strip_prefix)
+            .map(|s| ustr::ustr(s).as_str()))
+        .map(|s| log_name(s, class))
+        .unwrap_or("UNKNOWN")
+}
+
 pub fn log_name(weapon_name: &str, class: Class) -> &str {
     match weapon_name {
         "rocketlauncher" => "tf_projectile_rocket",

@@ -138,3 +138,6 @@ pub const EFFECT_ENTITY: SendPropIdentifier = SendPropIdentifier::new("DT_Effect
 pub const ANIM_PLAYER: SendPropIdentifier =
     SendPropIdentifier::new("DT_TEPlayerAnimEvent", "m_hPlayer");
 pub const ANIM_ID: SendPropIdentifier = SendPropIdentifier::new("DT_TEPlayerAnimEvent", "m_iEvent");
+
+pub const FIRE_BULLETS_PLAYER: SendPropIdentifier =
+    SendPropIdentifier::new("DT_TEFireBullets", "m_iPlayer");
