@@ -67,12 +67,23 @@ pub struct Stats {
     pub was_headshot: u32,
     #[serde(skip_serializing_if = "is_zero")]
     pub was_backstabbed: u32,
-    // TODO
-    // pub shots: u32,
-    // pub hits: u32,
+
+    #[serde(skip_serializing_if = "is_zero")]
+    pub shots: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub hits: u32,
 }
 
 impl Stats {
+    pub fn handle_fire_shot(&mut self) {
+        self.shots += 1;
+    }
+
+    // Not done as part of handle_damage_dealt as we don't want to count sentry or damage over time.
+    pub fn handle_shot_hit(&mut self) {
+        self.hits += 1;
+    }
+
     pub fn handle_damage_dealt(&mut self, hurt: &PlayerHurtEvent, damage_type: DamageType) {
         self.damage += hurt.damage_amount as u32;
 

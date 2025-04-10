@@ -400,6 +400,12 @@ impl Entity for Projectile {
             error!("No projectile launcher class {class_name} {p:?}");
         }
 
+        if !is_sentry && original_owner != 0 {
+            if let Some(item) = item {
+                game.handle_projectile_fired(&original_owner, &item);
+            }
+        }
+
         Self {
             launcher_schema_id: launcher_schema,
             is_sentry,
