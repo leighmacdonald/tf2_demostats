@@ -1,4 +1,4 @@
-use enumset::EnumSetType;
+use enumset::{EnumSet, EnumSetType};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 
@@ -22,8 +22,18 @@ pub enum RoundState {
 }
 
 pub const INVALID_HANDLE: u32 = 0x1fffff;
-pub const ENTITY_ON_GROUND: u16 = 1;
-pub const ENTITY_IN_WATER: u16 = 1 << 9;
+
+#[derive(
+    Copy, Clone, Deserialize, Serialize, IntoPrimitive, TryFromPrimitive, PartialEq, Debug, Default,
+)]
+#[repr(u16)]
+pub enum GrenadeType {
+    #[default]
+    Pipe = 0, // Stock and Iron Bomber -- distinguish those by model id if necessary
+    Sticky = 1,
+    StickyJumper = 2,
+    Cannonball = 3,
+}
 
 #[derive(
     Copy, Clone, Deserialize, Serialize, IntoPrimitive, TryFromPrimitive, PartialEq, Debug,
@@ -114,160 +124,210 @@ pub enum DamageType {
     Croc = 81,
     TauntGasBlast = 82,
     AxtinguisherBoosted = 83,
+    KrampusMelee = 84,
+    KrampusRanged = 85,
+}
+
+#[derive(
+    Copy, Clone, Deserialize, Serialize, IntoPrimitive, TryFromPrimitive, PartialEq, Debug,
+)]
+#[repr(u8)]
+pub enum DamageEffect {
+    Normal = 4,
+    Crit = 0,
+    MiniCrit = 1,
+    DoubleDonk = 2,
+    WaterSplash = 3,
+    DragonsFuryBonus = 5,
+    Stomp = 6,
 }
 
 #[derive(Deserialize, Serialize, IntoPrimitive, TryFromPrimitive, PartialEq, Debug)]
 #[repr(u16)]
 pub enum WeaponId {
-    WeaponNone = 0,
-    WeaponBat = 1,
-    WeaponBatWood = 2,
-    WeaponBottle = 3,
-    WeaponFireaxe = 4,
-    WeaponClub = 5,
-    WeaponCrowbar = 6,
-    WeaponKnife = 7,
-    WeaponFists = 8,
-    WeaponShovel = 9,
-    WeaponWrench = 10,
-    WeaponBonesaw = 11,
-    WeaponShotgunPrimary = 12,
-    WeaponShotgunSoldier = 13,
-    WeaponShotgunHwg = 14,
-    WeaponShotgunPyro = 15,
-    WeaponScattergun = 16,
-    WeaponSniperrifle = 17,
-    WeaponMinigun = 18,
-    WeaponSmg = 19,
-    WeaponSyringegunMedic = 20,
-    WeaponTranq = 21,
-    WeaponRocketlauncher = 22,
-    WeaponGrenadelauncher = 23,
-    WeaponPipebomblauncher = 24,
-    WeaponFlamethrower = 25,
-    WeaponGrenadeNormal = 26,
-    WeaponGrenadeConcussion = 27,
-    WeaponGrenadeNail = 28,
-    WeaponGrenadeMirv = 29,
-    WeaponGrenadeMirvDemoman = 30,
-    WeaponGrenadeNapalm = 31,
-    WeaponGrenadeGas = 32,
-    WeaponGrenadeEmp = 33,
-    WeaponGrenadeCaltrop = 34,
-    WeaponGrenadePipebomb = 35,
-    WeaponGrenadeSmokeBomb = 36,
-    WeaponGrenadeHeal = 37,
-    WeaponGrenadeStunball = 38,
-    WeaponGrenadeJar = 39,
-    WeaponGrenadeJarMilk = 40,
-    WeaponPistol = 41,
-    WeaponPistolScout = 42,
-    WeaponRevolver = 43,
-    WeaponNailgun = 44,
-    WeaponPda = 45,
-    WeaponPdaEngineerBuild = 46,
-    WeaponPdaEngineerDestroy = 47,
-    WeaponPdaSpy = 48,
-    WeaponBuilder = 49,
-    WeaponMedigun = 50,
-    WeaponGrenadeMirvbomb = 51,
-    WeaponFlamethrowerRocket = 52,
-    WeaponGrenadeDemoman = 53,
-    WeaponSentryBullet = 54,
-    WeaponSentryRocket = 55,
-    WeaponDispenser = 56,
-    WeaponInvis = 57,
-    WeaponFlaregun = 58,
-    WeaponLunchbox = 59,
-    WeaponJar = 60,
-    WeaponCompoundBow = 61,
-    WeaponBuffItem = 62,
-    WeaponPumpkinBomb = 63,
-    WeaponSword = 64,
-    WeaponRocketlauncherDirecthit = 65,
-    WeaponLifeline = 66,
-    WeaponLaserPointer = 67,
-    WeaponDispenserGun = 68,
-    WeaponSentryRevenge = 69,
-    WeaponJarMilk = 70,
-    WeaponHandgunScoutPrimary = 71,
-    WeaponBatFish = 72,
-    WeaponCrossbow = 73,
-    WeaponStickbomb = 74,
-    WeaponHandgunScoutSecondary = 75,
-    WeaponSodaPopper = 76,
-    WeaponSniperrifleDecap = 77,
-    WeaponRaygun = 78,
-    WeaponParticleCannon = 79,
-    WeaponMechanicalArm = 80,
-    WeaponDrgPomson = 81,
-    WeaponBatGiftwrap = 82,
-    WeaponGrenadeOrnamentBall = 83,
-    WeaponFlaregunRevenge = 84,
-    WeaponPepBrawlerBlaster = 85,
-    WeaponCleaver = 86,
-    WeaponGrenadeCleaver = 87,
-    WeaponStickyBallLauncher = 88,
-    WeaponGrenadeStickyBall = 89,
-    WeaponShotgunBuildingRescue = 90,
-    WeaponCannon = 91,
-    WeaponThrowable = 92,
-    WeaponGrenadeThrowable = 93,
-    WeaponPdaSpyBuild = 94,
-    WeaponGrenadeWaterballoon = 95,
-    WeaponHarvesterSaw = 96,
-    WeaponSpellbook = 97,
-    WeaponSpellbookProjectile = 98,
-    WeaponSniperrifleClassic = 99,
-    WeaponParachute = 100,
-    WeaponGrapplinghook = 101,
-    WeaponPasstimeGun = 102,
-    WeaponSniperrifleRevolver = 103,
-    WeaponChargedSmg = 104,
+    None = 0,
+    Bat = 1,
+    BatWood = 2,
+    Bottle = 3,
+    Fireaxe = 4,
+    Club = 5,
+    Crowbar = 6,
+    Knife = 7,
+    Fists = 8,
+    Shovel = 9,
+    Wrench = 10,
+    Bonesaw = 11,
+    ShotgunPrimary = 12,
+    ShotgunSoldier = 13,
+    ShotgunHwg = 14,
+    ShotgunPyro = 15,
+    Scattergun = 16,
+    Sniperrifle = 17,
+    Minigun = 18,
+    Smg = 19,
+    SyringegunMedic = 20,
+    Tranq = 21,
+    Rocketlauncher = 22,
+    Grenadelauncher = 23,
+    Pipebomblauncher = 24,
+    Flamethrower = 25,
+    GrenadeNormal = 26,
+    GrenadeConcussion = 27,
+    GrenadeNail = 28,
+    GrenadeMirv = 29,
+    GrenadeMirvDemoman = 30,
+    GrenadeNapalm = 31,
+    GrenadeGas = 32,
+    GrenadeEmp = 33,
+    GrenadeCaltrop = 34,
+    GrenadePipebomb = 35,
+    GrenadeSmokeBomb = 36,
+    GrenadeHeal = 37,
+    GrenadeStunball = 38,
+    GrenadeJar = 39,
+    GrenadeJarMilk = 40,
+    Pistol = 41,
+    PistolScout = 42,
+    Revolver = 43,
+    Nailgun = 44,
+    Pda = 45,
+    PdaEngineerBuild = 46,
+    PdaEngineerDestroy = 47,
+    PdaSpy = 48,
+    Builder = 49,
+    Medigun = 50,
+    GrenadeMirvbomb = 51,
+    FlamethrowerRocket = 52,
+    GrenadeDemoman = 53,
+    SentryBullet = 54,
+    SentryRocket = 55,
+    Dispenser = 56,
+    Invis = 57,
+    Flaregun = 58,
+    Lunchbox = 59,
+    Jar = 60,
+    CompoundBow = 61,
+    BuffItem = 62,
+    PumpkinBomb = 63,
+    Sword = 64,
+    RocketlauncherDirecthit = 65,
+    Lifeline = 66,
+    LaserPointer = 67,
+    DispenserGun = 68,
+    SentryRevenge = 69,
+    JarMilk = 70,
+    HandgunScoutPrimary = 71,
+    BatFish = 72,
+    Crossbow = 73,
+    Stickbomb = 74,
+    HandgunScoutSecondary = 75,
+    SodaPopper = 76,
+    SniperrifleDecap = 77,
+    Raygun = 78,
+    ParticleCannon = 79,
+    MechanicalArm = 80,
+    DrgPomson = 81,
+    BatGiftwrap = 82,
+    GrenadeOrnamentBall = 83,
+    FlaregunRevenge = 84,
+    PepBrawlerBlaster = 85,
+    Cleaver = 86,
+    GrenadeCleaver = 87,
+    StickyBallLauncher = 88,
+    GrenadeStickyBall = 89,
+    ShotgunBuildingRescue = 90,
+    Cannon = 91,
+    Throwable = 92,
+    GrenadeThrowable = 93,
+    PdaSpyBuild = 94,
+    GrenadeWaterballoon = 95,
+    HarvesterSaw = 96,
+    Spellbook = 97,
+    SpellbookProjectile = 98,
+    SniperrifleClassic = 99,
+    Parachute = 100,
+    Grapplinghook = 101,
+    PasstimeGun = 102,
+    SniperrifleRevolver = 103,
+    ChargedSmg = 104,
+    BreakableSign = 105,
+    Rocketpack = 106,
+    Slap = 107,
+    JarGas = 108,
+    GrenadeJarGas = 109,
+    FlameBall = 110,
 }
 
-#[repr(u8)]
+impl WeaponId {
+    pub fn is_melee(&self) -> bool {
+        matches!(
+            self,
+            WeaponId::Bat
+                | WeaponId::BatWood
+                | WeaponId::Bottle
+                | WeaponId::Fireaxe
+                | WeaponId::Club
+                | WeaponId::Crowbar
+                | WeaponId::Knife
+                | WeaponId::Fists
+                | WeaponId::Shovel
+                | WeaponId::Wrench
+                | WeaponId::Bonesaw
+                | WeaponId::Sword
+                | WeaponId::BatFish
+                | WeaponId::MechanicalArm
+                | WeaponId::BatGiftwrap
+                | WeaponId::Cleaver
+                | WeaponId::HarvesterSaw
+                | WeaponId::Slap
+        )
+    }
+}
+
+#[repr(u32)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TryFromPrimitive)]
-pub enum PlayerAnim {
-    AttackPrimary,
-    AttackSecondary,
-    AttackGrenade,
-    Reload,
-    ReloadLoop,
-    ReloadEnd,
-    Jump,
-    Swim,
-    Die,
-    FlinchChest,
-    FlinchHead,
-    FlinchLeftarm,
-    FlinchRightarm,
-    FlinchLeftleg,
-    FlinchRightleg,
-    Doublejump,
-    Cancel,
-    Spawn,
-    SnapYaw,
-    Custom, // Used to play specific activities
-    CustomGesture,
-    CustomSequence, // Used to play specific sequences
-    CustomGestureSequence,
-    AttackPre,
-    AttackPost,
-    Grenade1Draw,
-    Grenade2Draw,
-    Grenade1Throw,
-    Grenade2Throw,
-    VoiceCommandGesture,
-    DoublejumpCrouch,
-    StunBegin,
-    StunMiddle,
-    StunEnd,
-    PasstimeThrowBegin,
-    PasstimeThrowMiddle,
-    PasstimeThrowEnd,
-    PasstimeThrowCancel,
-    AttackPrimarySuper,
+pub enum PlayerAnimation {
+    AttackPrimary = 0,
+    AttackSecondary = 1,
+    AttackGrenade = 2,
+    Reload = 3,
+    ReloadLoop = 4,
+    ReloadEnd = 5,
+    Jump = 6,
+    Swim = 7,
+    Die = 8,
+    FlinchChest = 9,
+    FlinchHead = 10,
+    FlinchLeftarm = 11,
+    FlinchRightarm = 12,
+    FlinchLeftleg = 13,
+    FlinchRightleg = 14,
+    Doublejump = 15,
+    Cancel = 16,
+    Spawn = 17,
+    SnapYaw = 18,
+    Custom = 19, // Used to play specific activities
+    CustomGesture = 20,
+    CustomSequence = 21, // Used to play specific sequences
+    CustomGestureSequence = 22,
+    AttackPre = 23,
+    AttackPost = 24,
+    Grenade1Draw = 25,
+    Grenade2Draw = 26,
+    Grenade1Throw = 27,
+    Grenade2Throw = 28,
+    VoiceCommandGesture = 29,
+    DoublejumpCrouch = 30,
+    StunBegin = 31,
+    StunMiddle = 32,
+    StunEnd = 33,
+    PasstimeThrowBegin = 34,
+    PasstimeThrowMiddle = 35,
+    PasstimeThrowEnd = 36,
+    ContractPdaBegin = 37,
+    ContractPdaMiddle = 38,
+    ContractPdaEnd = 39,
+    AttackPrimarySuper = 40,
 }
 
 #[repr(u16)]
@@ -425,4 +485,98 @@ pub enum PlayerCondition {
     // PowerupModeDominant = 129,
     // ImmuneToPushback = 130,
 }
-//pub const LAST_CONDITION: PlayerCondition = PlayerCondition::GrappledByPlayer;
+
+pub fn update_condition<const OFFSET: usize>(condition: &mut EnumSet<PlayerCondition>, bits: u32) {
+    let mask: u128 = 0xffffffff << OFFSET;
+    let new_cond = (condition.as_repr() & !mask) | ((bits as u128) << OFFSET);
+    *condition = EnumSet::<PlayerCondition>::from_repr(new_cond);
+}
+
+#[repr(u32)]
+#[derive(Debug, Serialize, Deserialize, TryFromPrimitive, EnumSetType)]
+#[enumset(repr = "u32")]
+pub enum Damage {
+    Crush = 0,
+    Bullet = 1,
+    Slash = 2,
+    Burn = 3,
+    Vehicle = 4,
+    Fall = 5,
+    Blast = 6,
+    Club = 7,
+    Shock = 8,
+    Sonic = 9,
+    NoFalloff = 10,
+    PreventPhysicsForce = 11,
+    NeverGib = 12,
+    AlwaysGib = 13,
+    Drown = 14,
+    Paralyze = 15,
+    NerveGas = 16,
+    NoFalloffTooClose = 17,
+    HalfFalloff = 18,
+    DrownRecover = 19,
+    Crit = 20,
+    DoFalloff = 21,
+    RemoveNoRagdoll = 22,
+    PhysGun = 23,
+    Ignite = 24,
+    HitLocation = 25, // Sniper, ambassador
+    DontCountTowardsCritRate = 26,
+    Melee = 27,
+    Direct = 28,
+    Buckshot = 29,
+}
+
+#[repr(u32)]
+#[derive(Debug, Serialize, Deserialize, TryFromPrimitive, EnumSetType)]
+#[enumset(repr = "u32")]
+pub enum Flags {
+    OnGround = 0,
+    Ducking = 1,
+    WaterJump = 2,
+    OnTrain = 3,
+    InRain = 4,
+    Frozen = 5,
+    AtControls = 6,
+    Client = 7,
+    FakeClient = 8,
+    InWater = 9,
+    Fly = 10,
+    Swim = 11,
+    Conveyor = 12,
+    Npc = 13,
+    GodMode = 14,
+    Notarget = 15,
+    AimTarget = 16,
+    PartialGround = 17,
+    StaticProp = 18,
+    Graphed = 19,
+    Grenade = 20,
+    StepMovement = 21,
+    DontTouch = 22,
+    BaseVelocity = 23,
+    WorldBrush = 24,
+    Object = 25,
+    KillMe = 26,
+    OnFire = 27,
+    Dissolving = 28,
+    TransRagdoll = 29,
+    UnblockableByPlayer = 30,
+}
+
+#[repr(u16)]
+#[derive(Debug, Serialize, Deserialize, TryFromPrimitive, EnumSetType)]
+#[enumset(repr = "u16")]
+pub enum Effects {
+    BoneMerge = 0,
+    BrightLight = 1,
+    DimLight = 2,
+    NoInterp = 3,
+    NoShadow = 4,
+    NoDraw = 5,
+    NoReceiveShadow = 6,
+    BoneMergeFastCull = 7,
+    ItemBlink = 8,
+    ParentAnimates = 9,
+}
