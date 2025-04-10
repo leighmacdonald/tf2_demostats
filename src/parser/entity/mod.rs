@@ -8,6 +8,12 @@ use tf_demo_parser::{demo::message::packetentities::PacketEntity, ParserState};
 pub mod sentry;
 pub use sentry::*;
 
+pub mod dispenser;
+pub use dispenser::*;
+
+pub mod teleporter;
+pub use teleporter::*;
+
 pub mod projectile;
 pub use projectile::*;
 
@@ -24,6 +30,8 @@ pub use shield::*;
 pub enum EntityClass {
     Projectile,
     Sentry,
+    Dispenser,
+    Teleporter,
     Weapon,
     Shield,
     Player,

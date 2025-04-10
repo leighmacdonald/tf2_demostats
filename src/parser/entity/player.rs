@@ -201,9 +201,10 @@ impl Player {
                 (COSMETIC_6, &SendPropValue::Integer(x)) => patch.cosmetics[6] = Some(x as u32),
                 (COSMETIC_7, &SendPropValue::Integer(x)) => patch.cosmetics[7] = Some(x as u32),
 
-                _ => {}
+                _ => {
+                    trace!("player unused prop {:?}: {prop:?}", packet.entity_index);
+                }
             }
-            trace!("player wep {:?} {prop:?}", packet.entity_index);
         }
     }
 

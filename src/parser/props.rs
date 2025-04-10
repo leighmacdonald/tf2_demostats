@@ -68,15 +68,20 @@ pub const ACTIVE_WEAPON_HANDLE: SendPropIdentifier =
 // These DT_TFPlayerScoringDataExclusive props are only present in PoV demos, not STV demos.
 //
 // Other fields: m_iDominations, m_iRevenge,
-// m_iBuildingsDestroyed, m_iHeadshots, m_iBackstabs,
-// m_iHealPoints, m_iInvulns, m_iTeleports, m_iDamageDone,
-// m_iBonusPoints, m_iPoints, m_iCaptures, m_iDefenses
+//  m_iHeadshots, m_iBackstabs, m_iHealPoints, m_iInvulns,
+//  m_iTeleports, m_iDamageDone, m_iBonusPoints, m_iPoints,
+//  m_iCaptures, m_iDefenses
 pub const KILLS: SendPropIdentifier =
     SendPropIdentifier::new("DT_TFPlayerScoringDataExclusive", "m_iKills");
 pub const DEATHS: SendPropIdentifier =
     SendPropIdentifier::new("DT_TFPlayerScoringDataExclusive", "m_iDeaths");
 pub const KILL_ASSISTS: SendPropIdentifier =
     SendPropIdentifier::new("DT_TFPlayerScoringDataExclusive", "m_iKillAssists");
+// These are stuck at 0 in our corpus of STVs?
+// pub const BUILDINGS_BUILT: SendPropIdentifier =
+//     SendPropIdentifier::new("DT_TFPlayerScoringDataExclusive", "m_iBuildingsBuilt");
+// pub const BUILDINGS_DESTROYED: SendPropIdentifier =
+//     SendPropIdentifier::new("DT_TFPlayerScoringDataExclusive", "m_iBuildingsDestroyed");
 
 pub const WEP_0: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "000");
 pub const WEP_1: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "001");
