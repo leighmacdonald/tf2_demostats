@@ -28,7 +28,7 @@ use std::{
 };
 use tf_demo_parser::{
     demo::{
-        data::{DemoTick, UserInfo},
+        data::{DemoTick, MaybeUtf8String, UserInfo},
         gameevent_gen::{
             PlayerDeathEvent, PlayerHurtEvent, TeamPlayCaptureBlockedEvent,
             TeamPlayPointCapturedEvent,
@@ -178,18 +178,56 @@ impl MatchAnalyzerView<'_> {
             error!("Could not find player entity for handle that fired projectile {owner:?}");
             return;
         };
-        let Some(pe) = self.get_player(&eid) else {
+        let Some(pe) = self.get_player(eid) else {
             error!("Could not find player entity that fired projectile {owner:?}");
             return;
         };
         let class = pe.class;
         let uid = pe.user_id;
+
         let Some(p) = self.player_summaries.get_mut(&uid) else {
             error!("Could not find player sumamry that fired projectile {uid}");
             return;
         };
 
         p.handle_fire_shot(weapon::weapon_name(item, class));
+    }
+
+    pub fn handle_object_built(&mut self, owner: &u32) {
+        let Some(eid) = self.entity_handles.get(owner) else {
+            error!("Could not find player entity for handle that fired projectile {owner:?}");
+            return;
+        };
+        let Some(pe) = self.get_player(eid) else {
+            error!("Could not find player entity that fired projectile {owner:?}");
+            return;
+        };
+
+        let class = pe.class;
+
+        let uid = pe.user_id;
+
+        let Some(item) = self
+            .entity_handles
+            .get(&pe.last_active_weapon_handle)
+            .and_then(|eid| {
+                self.entities
+                    .get(usize::from(*eid))
+                    .and_then(|b| b.as_ref())
+            })
+            .and_then(|e| e.weapon())
+            .and_then(|w| self.schema.items.get(&w.schema_id))
+        else {
+            error!("Could not find item used to create sentry");
+            return;
+        };
+
+        let Some(p) = self.player_summaries.get_mut(&uid) else {
+            error!("Could not find player sumamry that fired projectile {uid}");
+            return;
+        };
+
+        p.handle_object_built(weapon::weapon_name(item, class));
     }
 }
 
@@ -387,6 +425,18 @@ impl PlayerSummary {
         self.stats.handle_shot_hit();
         self.class_stats().handle_shot_hit();
         self.weapon_stats(weapon).handle_shot_hit();
+    }
+
+    fn handle_object_built(&mut self, weapon: &str) {
+        self.stats.handle_object_built();
+        // This can only happen as engi, so no class_stats() update
+        self.weapon_stats(weapon).handle_object_built();
+    }
+
+    fn handle_object_destroyed(&mut self, weapon: &str) {
+        self.stats.handle_object_destroyed();
+        self.class_stats().handle_object_destroyed();
+        self.weapon_stats(weapon).handle_object_destroyed();
     }
 
     fn handle_damage_dealt(
@@ -832,6 +882,12 @@ impl<'a> MatchAnalyzer<'a> {
                 let e: Box<dyn Entity> = match class_name {
                     "CObjectSentrygun" => {
                         Box::new(entity::Sentry::new(packet, parser_state, &mut ma))
+                    }
+                    "CObjectTeleporter" => {
+                        Box::new(entity::Teleporter::new(packet, parser_state, &mut ma))
+                    }
+                    "CObjectDispenser" => {
+                        Box::new(entity::Dispenser::new(packet, parser_state, &mut ma))
                     }
                     "CTFPlayer" => Box::new(entity::Player::new(packet, parser_state, &mut ma)),
                     "CTFWearableDemoShield" => {
@@ -1541,7 +1597,7 @@ impl<'a> MatchAnalyzer<'a> {
 
         // TODO: Handle initial flamethrower hits; ignore
         if damage_type != DamageType::Burning
-            && damage_type != DamageType::Burning
+            && damage_type != DamageType::BurningFlare
             && !weapon::is_sentry(weapon_name)
         {
             attacker.handle_shot_hit(weapon_name);
@@ -1880,6 +1936,53 @@ impl MessageHandler for MatchAnalyzer<'_> {
                 GameEvent::HLTVStatus(_) => {}
                 GameEvent::TeamPlayBroadcastAudio(_) => {}
                 GameEvent::TeamPlayGameOver(_) => {}
+
+                GameEvent::ObjectDestroyed(e) => {
+                    if self.round_state != RoundState::Running {
+                        return;
+                    }
+
+                    let attacker_uid = UserId::from(e.attacker);
+
+                    let mut weapon: &'static str = ustr::ustr(e.weapon.as_ref()).as_str();
+                    if matches!(e.weapon, MaybeUtf8String::Invalid(_))
+                        || weapon == "building_carried_destroyed"
+                    {
+                        // Get the actual weapon name
+                        //
+                        // TODO: Do full projectile tracking here -- this will be inaccurate if an
+                        // object is destroyed by a projectile but the shooter changed weapon or
+                        // died.
+
+                        let Some(player) = self.player_summaries.get(&attacker_uid) else {
+                            error!("Could not find player that destroyed object {attacker_uid}");
+                            return;
+                        };
+                        let Some(player_ent) = self.get_player(&player.entity_id) else {
+                            error!(
+                                "Could not find player entity that destroyed object {}",
+                                player.entity_id
+                            );
+                            return;
+                        };
+                        let Some(item) = self
+                            .get_weapon(&player_ent.last_active_weapon_handle)
+                            .and_then(|w| self.schema.items.get(&w.schema_id))
+                        else {
+                            return;
+                        };
+                        weapon = weapon::weapon_name(item, player_ent.class);
+                    }
+
+                    let Some(attacker) = self.player_summaries.get_mut(&attacker_uid) else {
+                        error!(
+                            "Could not find attacker {attacker_uid} that destroyed building {e:?}"
+                        );
+                        return;
+                    };
+
+                    attacker.handle_object_destroyed(weapon);
+                }
 
                 _ => {
                     trace!("Unhandled game event: {event:?}");
