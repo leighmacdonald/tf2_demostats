@@ -121,6 +121,7 @@ pub struct MatchAnalyzer<'a> {
     entities: Box<[Option<Box<dyn Entity>>; ENTITY_COUNT]>,
     colliders: Box<[Option<ColliderHandle>; ENTITY_COUNT]>,
 
+    effects: HashMap<u32, String>,
     models: HashMap<u32, String>,
     waiting_for_players: bool,
     round_state: RoundState,
@@ -135,6 +136,7 @@ pub struct MatchAnalyzer<'a> {
     sentry_shots: Vec<SentryShot>,
     explosions: Vec<Explosion>,
     airblasts: HashSet<u32>, // handles of players that airblasted this tick
+    deleted_entities: HashSet<EntityId>,
 
     // Queryable geometry world. QVBH under the hood.
     world: QueryPipeline,
@@ -525,6 +527,7 @@ impl<'a> MatchAnalyzer<'a> {
             entity_handles: Default::default(),
             entities: Box::new([const { None }; ENTITY_COUNT]),
             colliders: Box::new([const { None }; ENTITY_COUNT]),
+            effects: Default::default(),
             models: Default::default(),
             waiting_for_players: Default::default(),
             round_state: Default::default(),
@@ -536,6 +539,7 @@ impl<'a> MatchAnalyzer<'a> {
             sentry_shots: Default::default(),
             explosions: Default::default(),
             airblasts: Default::default(),
+            deleted_entities: Default::default(),
             world: QueryPipeline::new(),
             island_manager: IslandManager::new(),
             collider_set: ColliderSet::with_capacity(ENTITY_COUNT),
@@ -897,6 +901,8 @@ impl<'a> MatchAnalyzer<'a> {
                 e.apply_preserve(update);
             }
             UpdateType::Delete | UpdateType::Leave => {
+                self.deleted_entities.insert(packet.entity_index.clone());
+
                 if !packet.props.is_empty() {
                     error!(
                         "Unexpect props on {:?} update: {:?}",
@@ -1579,6 +1585,7 @@ impl<'a> MatchAnalyzer<'a> {
         self.hurts.drain(..);
         self.sentry_shots.drain(..);
         self.airblasts.drain();
+        self.deleted_entities.drain();
 
         self.tick = *tick;
 
@@ -1762,19 +1769,45 @@ impl MessageHandler for MatchAnalyzer<'_> {
                             }
                         }
                     } else if class.name == "CTEEffectDispatch" {
+                        let mut entity = None;
+                        let mut name = None;
                         for p in &e.props {
-                            if let (EFFECT_ENTITY, &SendPropValue::Integer(x)) =
-                                (p.identifier, &p.value)
-                            {
-                                let e = self.entities.get(x as usize).and_then(|e| e.as_ref());
-                                trace!("effect dispatch to ent {x} {e:?}");
-
-                                if let Some(sentry) = e.and_then(|e| e.sentry()) {
-                                    self.sentry_shots.push(SentryShot {
-                                        sentry: sentry.clone(),
-                                    });
+                            match (p.identifier, &p.value) {
+                                (EFFECT_ENTITY, &SendPropValue::Integer(x)) => {
+                                    entity = Some(x as u32);
                                 }
+                                (EFFECT_NAME, &SendPropValue::Integer(x)) => {
+                                    name = Some(x as u32);
+                                }
+                                _ => {}
                             }
+                        }
+
+                        let (Some(entity), Some(name)) = (entity, name) else {
+                            trace!("Effect does not have both name:{name:?} and an entity:{entity:?} from {e:?}");
+                            return;
+                        };
+                        let Some(ent) = self.entities.get(entity as usize).and_then(|e| e.as_ref())
+                        else {
+                            // This is expected to rarely happen when a sentry is destroyed on the
+                            // same tick that it shoot; otherwise it is an issue.
+                            if !self.deleted_entities.contains(&EntityId::from(entity)) {
+                                error!("Unknown entity from effect dispatch: {entity}");
+                            }
+                            return;
+                        };
+                        let Some(name) = self.effects.get(&name).map(|e: &String| e.as_str())
+                        else {
+                            error!("Unknown effect name: {name}");
+                            return;
+                        };
+
+                        trace!("effect dispatch to ent {name} {e:?} {ent:?}");
+
+                        if let Some(sentry) = ent.sentry() {
+                            self.sentry_shots.push(SentryShot {
+                                sentry: sentry.clone(),
+                            });
                         }
                     } else if class.name == "CTEFireBullets" {
                         let mut player = None;
@@ -1787,6 +1820,13 @@ impl MessageHandler for MatchAnalyzer<'_> {
                                 player = Some(EntityId::from((x + 1) as u32));
                             }
                         }
+
+                        if player.is_none() {
+                            // This seems to just rarely be missing off events
+                            debug!("No player entity for firebullets {e:?}");
+                            continue;
+                        }
+
                         let Some(pe) = player.and_then(|id| self.get_player(&id)) else {
                             error!(
                                 "Could not find player entity for firebullets player {player:?}"
@@ -1970,9 +2010,17 @@ impl MessageHandler for MatchAnalyzer<'_> {
                 entry.text.as_ref().map(|s| s.as_ref()),
                 entry.extra_data.as_ref().map(|data| data.data.clone()),
             );
-        }
-        if table == "modelprecache" {
+        } else if table == "modelprecache" {
             self.models.insert(
+                index as u32,
+                entry
+                    .text
+                    .as_ref()
+                    .map(|s| s.to_string())
+                    .unwrap_or("".to_string()),
+            );
+        } else if table == "EffectDispatch" {
+            self.effects.insert(
                 index as u32,
                 entry
                     .text

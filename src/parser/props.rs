@@ -140,6 +140,9 @@ pub const ROUND_STATE: SendPropIdentifier =
 
 // Temp entities
 pub const EFFECT_ENTITY: SendPropIdentifier = SendPropIdentifier::new("DT_EffectData", "entindex");
+pub const EFFECT_NAME: SendPropIdentifier =
+    SendPropIdentifier::new("DT_EffectData", "m_iEffectName");
+
 pub const ANIM_PLAYER: SendPropIdentifier =
     SendPropIdentifier::new("DT_TEPlayerAnimEvent", "m_hPlayer");
 pub const ANIM_ID: SendPropIdentifier = SendPropIdentifier::new("DT_TEPlayerAnimEvent", "m_iEvent");
