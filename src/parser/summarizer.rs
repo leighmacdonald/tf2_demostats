@@ -245,46 +245,6 @@ pub struct Killstreak {
     pub duration: u32,
 }
 
-// Med specific stats
-#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
-pub struct HealersSummary {
-    #[serde(skip_serializing_if = "is_zero")]
-    pub preround_healing: u32,
-    #[serde(skip_serializing_if = "is_zero")]
-    pub healing: u32,
-    #[serde(skip_serializing_if = "is_zero")]
-    pub postround_healing: u32,
-
-    #[serde(skip_serializing_if = "is_zero")]
-    pub drops: u32,
-    #[serde(skip_serializing_if = "is_zero")]
-    pub near_full_charge_death: u32,
-    #[serde(skip_serializing_if = "is_zero")]
-    pub charges_uber: u32,
-    #[serde(skip_serializing_if = "is_zero")]
-    pub charges_kritz: u32,
-    #[serde(skip_serializing_if = "is_zero")]
-    pub charges_quickfix: u32,
-    // TODO:
-    // pub charges_vacc: u32,
-    // pub avg_uber_length: u32,
-    // pub major_adv_lost: u32,
-    // pub biggest_adv_lost: u32,
-}
-
-impl HealersSummary {
-    pub fn is_empty(&self) -> bool {
-        self.preround_healing == 0
-            && self.healing == 0
-            && self.postround_healing == 0
-            && self.drops == 0
-            && self.near_full_charge_death == 0
-            && self.charges_uber == 0
-            && self.charges_kritz == 0
-            && self.charges_quickfix == 0
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct RoundSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -348,9 +308,6 @@ pub struct PlayerSummary {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scoreboard_damage: Option<u32>,
-
-    #[serde(skip_serializing_if = "HealersSummary::is_empty")]
-    pub healing: HealersSummary,
 
     // TODO
     //pub healing_taken: u32,
@@ -487,10 +444,11 @@ impl PlayerSummary {
     fn handle_death(&mut self, round_state: RoundState, flags: EnumSet<Death>) {
         if self.class == Class::Medic && round_state == RoundState::Running {
             if self.charge == 1.0 {
-                self.healing.drops += 1;
+                self.stats.handle_drop();
+                self.class_stats().handle_drop();
             } else if self.charge > 0.95 {
-                // TODO: This should really be a continuos variable to be a more smooth metric
-                self.healing.near_full_charge_death += 1;
+                self.stats.handle_near_full_charge_death();
+                self.class_stats().handle_near_full_charge_death();
             }
         }
 
@@ -498,15 +456,20 @@ impl PlayerSummary {
         self.class_stats().handle_death(round_state, flags);
     }
 
-    fn handle_healing(&mut self, round_state: RoundState, amount: u32) {
-        if round_state == RoundState::PreRound {
-            self.healing.preround_healing += amount;
-        } else if round_state == RoundState::TeamWin {
-            self.healing.postround_healing += amount;
-        } else {
-            self.healing.healing += amount;
-        }
+    pub fn handle_charge_uber(&mut self) {
+        self.stats.handle_charge_uber();
+        self.class_stats().handle_charge_uber();
+    }
+    pub fn handle_charge_kritz(&mut self) {
+        self.stats.handle_charge_kritz();
+        self.class_stats().handle_charge_kritz();
+    }
+    pub fn handle_charge_quickfix(&mut self) {
+        self.stats.handle_charge_quickfix();
+        self.class_stats().handle_charge_quickfix();
+    }
 
+    fn handle_healing(&mut self, round_state: RoundState, amount: u32) {
         self.stats.handle_healing(round_state, amount);
         self.class_stats().handle_healing(round_state, amount);
     }
@@ -540,9 +503,9 @@ impl PlayerSummary {
             .unwrap_or(0.0);
 
         match charge_type {
-            0.0 => self.healing.charges_uber += 1,
-            1.0 => self.healing.charges_kritz += 1,
-            2.0 => self.healing.charges_quickfix += 1,
+            0.0 => self.handle_charge_uber(),
+            1.0 => self.handle_charge_kritz(),
+            2.0 => self.handle_charge_quickfix(),
             x => error!("Unknown medigun charge type: {}", x),
         }
     }

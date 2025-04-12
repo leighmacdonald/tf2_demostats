@@ -21,13 +21,27 @@ pub struct Stats {
     #[serde(skip_serializing_if = "is_zero")]
     pub postround_deaths: u32,
 
-    // Dupes with HealersSummary to cover non-med healing
     #[serde(skip_serializing_if = "is_zero")]
     pub preround_healing: u32,
     #[serde(skip_serializing_if = "is_zero")]
     pub healing: u32,
     #[serde(skip_serializing_if = "is_zero")]
     pub postround_healing: u32,
+
+    // med stats
+    #[serde(skip_serializing_if = "is_zero")]
+    pub drops: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub near_full_charge_death: u32, // TODO: This should be a continuous variable to be a more smooth metric
+
+    // TODO: consolidate these to a single "charge deployed" stat, differentiated by weapon like
+    // every other stat
+    #[serde(skip_serializing_if = "is_zero")]
+    pub charges_uber: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub charges_kritz: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub charges_quickfix: u32,
 
     #[serde(skip_serializing_if = "is_zero")]
     pub damage: u32, // Added up PlayerHurt events
@@ -95,6 +109,24 @@ impl Stats {
 
     pub fn handle_object_destroyed(&mut self) {
         self.object_destroyed += 1;
+    }
+
+    pub fn handle_drop(&mut self) {
+        self.drops += 1;
+    }
+
+    pub fn handle_near_full_charge_death(&mut self) {
+        self.near_full_charge_death += 1;
+    }
+
+    pub fn handle_charge_uber(&mut self) {
+        self.charges_uber += 1;
+    }
+    pub fn handle_charge_kritz(&mut self) {
+        self.charges_kritz += 1;
+    }
+    pub fn handle_charge_quickfix(&mut self) {
+        self.charges_quickfix += 1;
     }
 
     pub fn handle_damage_dealt(&mut self, hurt: &PlayerHurtEvent, damage_type: DamageType) {
@@ -206,10 +238,6 @@ impl Stats {
     }
 
     pub fn handle_healing(&mut self, round_state: RoundState, amount: u32) {
-        if round_state == RoundState::TeamWin {
-            return;
-        }
-
         if round_state == RoundState::PreRound {
             self.preround_healing += amount;
         } else if round_state == RoundState::TeamWin {
