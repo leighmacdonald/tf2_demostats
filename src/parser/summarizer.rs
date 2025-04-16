@@ -6,7 +6,7 @@ use crate::{
         },
         weapon::Weapon,
     },
-    schema::{Item, Schema},
+    schema::{Attribute, Item, Schema},
 };
 use enumset::EnumSet;
 use serde::{Deserialize, Serialize};
@@ -444,9 +444,11 @@ impl PlayerSummary {
     fn handle_charged(&mut self, _medigun: &WeaponState, medigun_item: &Item) {
         let charge_type = medigun_item
             .attributes
-            .iter()
-            .find(|a| a.class == "set_charge_type")
-            .map(|a| a.value)
+            .get("set_charge_type")
+            .and_then(|x| match x {
+                Attribute::Float(float) => Some(float.value),
+                _ => None,
+            })
             .unwrap_or(0.0);
 
         match charge_type {
@@ -1146,7 +1148,7 @@ impl<'a> MatchAnalyzer<'a> {
                     if let Some(uid) = self.weapon_owners.get(&handle) {
                         if let Some(player) = self.state.player_summaries.get_mut(uid) {
                             if let Some(medigun) = self.weapon_handles.get(&handle) {
-                                if let Some(item) = self.schema.get(&medigun.id) {
+                                if let Some(item) = self.schema.items.get(&medigun.id) {
                                     player.handle_charged(medigun, item);
                                 } else {
                                     error!(

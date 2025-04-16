@@ -1,130 +1,347 @@
-use std::collections::HashMap;
-
+use crate::Result;
+use awc::Client;
+use merge::Merge;
 use serde::{Deserialize, Serialize};
-use serde_json::Deserializer;
+use std::{collections::HashMap, env};
+use tracing::error;
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Item {
+#[serde(rename = "items_game")]
+pub struct ItemsGameFile {
+    pub game_info: GameInfo,
+    pub qualities: HashMap<String, Value>,
+    pub colors: HashMap<String, Color>,
+    pub rarities: HashMap<String, Rarity>,
+    pub equip_regions_list: EquipRegionsList,
+    pub equip_conflicts: HashMap<String, HashMap<String, u32>>,
+    pub quest_objective_conditions: HashMap<String, QuestObjectiveCondition>,
+    pub prefabs: HashMap<String, ItemRaw>,
+    pub items: HashMap<String, ItemRaw>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Value {
+    pub value: u32,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename = "game_info")]
+pub struct GameInfo {
+    pub first_valid_class: u32,
+    pub last_valid_class: u32,
+    pub account_class_index: u32,
+    pub account_first_valid_item_slot: u32,
+    pub account_last_valid_item_slot: u32,
+    pub first_valid_item_slot: u32,
+    pub last_valid_item_slot: u32,
+    pub num_item_presets: u32,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Color {
+    pub color_name: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Rarity {
+    pub value: u32,
+    pub loc_key: String,
+    pub loc_key_weapon: String,
+    pub color: String,
+    pub drop_sound: Option<String>,
+    pub next_rarity: Option<String>,
+    pub loot_list: Option<String>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct EquipRegionsList {
+    pub whole_head: String,
+    pub hat: String,
+    pub face: String,
+    pub glasses: String,
+    pub lenses: String,
+    pub shared: Vec<HashMap<String, String>>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuestObjectiveCondition {
     pub name: String,
-    pub defindex: u32,
-    pub item_class: String,
-    pub item_type_name: String,
-    pub item_name: String,
-    pub item_description: Option<String>,
-    pub proper_name: bool,
-    pub item_slot: Option<String>,
-    pub model_player: Option<String>,
-    pub item_quality: i64,
-    pub image_inventory: Option<String>,
-    pub min_ilevel: i64,
-    pub max_ilevel: i64,
-    pub image_url: Option<String>,
-    pub image_url_large: Option<String>,
-    pub drop_type: Option<String>,
+    pub condition_logic: ConditionLogic,
+    pub required_items: Option<HashMap<String, RequiredItem>>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename = "condition_logic")]
+pub struct ConditionLogic {
+    #[serde(rename = "type")]
+    pub type_field: Option<String>,
+    pub event_name: Option<String>,
+    #[serde(flatten)]
+    pub other: HashMap<String, serde_json::Value>, // Use serde_json::Value to handle dynamic content
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RequiredItem {
+    pub loaner_defindex: String,
+    pub qualifying_items: HashMap<String, QualifyingItem>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QualifyingItem {
+    pub defindex: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Prefab {
     pub craft_class: Option<String>,
-    pub craft_material_type: Option<String>,
-    pub capabilities: Capabilities,
-    #[serde(default)]
-    pub used_by_classes: Vec<String>,
-    #[serde(default)]
-    pub attributes: Vec<Attribute>,
-    pub item_set: Option<String>,
-    pub tool: Option<Tool>,
+    pub attributes: Option<HashMap<String, Attribute>>,
+    pub capabilities: Option<HashMap<String, String>>,
     pub holiday_restriction: Option<String>,
+    pub show_in_armory: Option<String>,
+    pub item_class: Option<String>,
+    pub image_inventory: Option<String>,
+    pub min_ilevel: Option<u32>,
+    pub max_ilevel: Option<u32>,
+    pub public_prefab: Option<String>,
+    pub tags: Option<HashMap<String, String>>,
     #[serde(default)]
-    pub styles: Vec<Style>,
+    pub prefab: Vec<String>, // For nested prefabs
+    pub static_attrs: Option<HashMap<String, String>>,
+    pub item_type_name: Option<String>,
+    pub item_slot: Option<String>,
+    pub item_quality: Option<String>,
+    pub visuals: Option<Visuals>,
+    pub equip_region: Option<String>,
+    pub used_by_classes: Option<HashMap<String, String>>,
+    pub tool: Option<Tool>,
+}
+
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Attribute {
+    Float(FloatAttribute),
+    String(StringAttribute),
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Capabilities {
-    #[serde(default)]
-    pub nameable: bool,
-    #[serde(default)]
-    pub can_craft_if_purchased: bool,
-    #[serde(default)]
-    pub can_gift_wrap: bool,
-    #[serde(default)]
-    pub can_craft_count: bool,
-    #[serde(default)]
-    pub can_craft_mark: bool,
-    #[serde(default)]
-    pub can_be_restored: bool,
-    #[serde(default)]
-    pub strange_parts: bool,
-    #[serde(default)]
-    pub can_card_upgrade: bool,
-    #[serde(default)]
-    pub can_strangify: bool,
-    #[serde(default)]
-    pub can_killstreakify: bool,
-    #[serde(default)]
-    pub can_consume: bool,
-    #[serde(default)]
-    pub paintable: bool,
-    #[serde(default)]
-    pub usable_gc: bool,
-    #[serde(default)]
-    pub usable_out_of_game: bool,
-    #[serde(default)]
-    pub can_unusualify: bool,
-    #[serde(default)]
-    pub decodable: bool,
-    #[serde(default)]
-    pub usable: bool,
+pub struct FloatAttribute {
+    pub attribute_class: String,
+    pub value: f32,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Attribute {
-    pub name: String,
-    pub class: String,
-    pub value: f64,
+pub struct StringAttribute {
+    pub attribute_class: String,
+    pub value: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Visuals {
+    #[serde(rename = "player_bodygroups")]
+    pub player_bodygroups: Option<HashMap<String, String>>,
+    pub styles: Option<HashMap<String, Style>>,
+    #[serde(rename = "animation_replacement")]
+    pub animation_replacement: Option<HashMap<String, String>>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Style {
+    pub skin: Option<u32>,
+    pub name: Option<String>,
+    pub skin_red: Option<u32>,
+    pub skin_blu: Option<u32>,
+    pub model_player_per_class: Option<HashMap<String, String>>,
+    pub additional_hidden_bodygroups: Option<HashMap<String, String>>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Tool {
     #[serde(rename = "type")]
-    pub type_field: String,
-    pub usage_capabilities: Option<UsageCapabilities>,
-    pub restriction: Option<String>,
+    pub type_field: Option<String>,
+    pub usage_capabilities: Option<HashMap<String, String>>,
+    pub usage: Option<Usage>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UsageCapabilities {
-    pub can_killstreakify: Option<bool>,
-    pub strange_parts: Option<bool>,
-    pub decodable: Option<bool>,
-    pub can_card_upgrade: Option<bool>,
+pub struct Usage {
+    pub item_desc_tool_target: Option<String>,
+    pub required_tags: Option<HashMap<String, String>>,
+    pub attributes: Option<HashMap<String, String>>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Style {
-    pub name: String,
-    pub additional_hidden_bodygroups: Option<AdditionalHiddenBodygroups>,
+fn overwrite<T>(left: &mut Option<T>, right: Option<T>) {
+    if right.is_some() {
+        *left = right;
+    }
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AdditionalHiddenBodygroups {
-    pub headphones: Option<i64>,
-    pub hat: Option<i64>,
-    pub grenades: Option<i64>,
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, merge::Merge)]
+pub struct ItemRaw {
+    #[merge(strategy = overwrite)]
+    pub name: Option<String>, // Present for prefabs, not others
+    #[merge(strategy = overwrite)]
+    pub hidden: Option<String>,
+    #[merge(strategy = overwrite)]
+    pub item_class: Option<String>,
+    #[merge(strategy = overwrite)]
+    pub item_name: Option<String>,
+
+    // Only Vec since some items are written with multiple type names :(
+    #[serde(default)]
+    #[merge(strategy = merge::vec::append)]
+    pub item_type_name: Vec<String>,
+    #[merge(strategy = overwrite)]
+    pub item_slot: Option<String>,
+    #[merge(strategy = overwrite)]
+    pub item_quality: Option<String>,
+    #[merge(strategy = overwrite)]
+    pub min_ilevel: Option<u32>,
+    #[merge(strategy = overwrite)]
+    pub max_ilevel: Option<u32>,
+    #[serde(default)]
+    #[merge(strategy = merge::vec::append)]
+    pub prefab: Vec<String>,
+    #[merge(strategy = overwrite)]
+    pub baseitem: Option<String>,
+    #[merge(strategy = overwrite)]
+    pub item_logname: Option<String>,
+
+    // Only Vec since some items are written with multiple attribute blocks :(
+    #[serde(default)]
+    #[merge(strategy = merge::vec::append)]
+    pub attributes: Vec<HashMap<String, Attribute>>,
 }
 
-pub type Schema = HashMap<u32, Item>;
-
-pub fn parse(path: &std::path::Path) -> std::io::Result<Schema> {
-    let file = std::fs::File::open(path)?;
-    let reader = std::io::BufReader::new(file);
-
-    let mut map = HashMap::with_capacity(10_000); // A bit larger than the scheam in Jan 2025
-    for item in Deserializer::from_reader(reader).into_iter::<Item>() {
-        match item {
-            Ok(item) => {
-                let defidx = item.defindex;
-                map.insert(defidx, item);
-            }
-            Err(e) => tracing::error!("{e}"),
+impl ItemRaw {
+    pub fn into_item(self) -> Item {
+        Item {
+            name: self.name,
+            hidden: self.hidden,
+            item_class: self.item_class,
+            item_name: self.item_name,
+            item_type_name: self.item_type_name,
+            item_slot: self.item_slot,
+            item_quality: self.item_quality,
+            min_ilevel: self.min_ilevel,
+            max_ilevel: self.max_ilevel,
+            prefab: self.prefab,
+            baseitem: self.baseitem,
+            item_logname: self.item_logname,
+            attributes: self
+                .attributes
+                .into_iter()
+                .fold(HashMap::default(), |mut a, b| {
+                    a.extend(b);
+                    a
+                }),
         }
     }
+}
 
-    Ok(map)
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct Item {
+    pub name: Option<String>, // Present for prefabs, not others
+    pub hidden: Option<String>,
+    pub item_class: Option<String>,
+    pub item_name: Option<String>,
+
+    pub item_type_name: Vec<String>,
+    pub item_slot: Option<String>,
+    pub item_quality: Option<String>,
+    pub min_ilevel: Option<u32>,
+    pub max_ilevel: Option<u32>,
+    pub prefab: Vec<String>,
+    pub baseitem: Option<String>,
+    pub item_logname: Option<String>,
+
+    pub attributes: HashMap<String, Attribute>,
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct Schema {
+    pub items: HashMap<u32, Item>,
+    pub prefabs: HashMap<String, ItemRaw>,
+}
+
+impl Schema {
+    pub fn make_prefab(&self, s: &str) -> ItemRaw {
+        let mut out = ItemRaw::default();
+        if let Some(op) = self.prefabs.get(s) {
+            for p in op.prefab.iter().flat_map(|s| s.split(" ")) {
+                let pi = self.make_prefab(p);
+                out.merge(pi.clone());
+            }
+            out.merge(op.clone());
+        } else {
+            error!("Unknown prefab: {s}");
+        }
+        out
+    }
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct SchemaUrl {
+    status: i32,
+    items_game_url: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct ApiResponse<T> {
+    result: T,
+}
+
+async fn fetch_bytes() -> Result<String> {
+    let schema_path_var = std::env::var("TF2_SCHEMA_PATH").or(env::var("DEMO_TF2_SCHEMA_PATH"));
+    if let Some(schema_string) = schema_path_var.ok() {
+        let schema_path = std::path::Path::new(&schema_string);
+        return Ok(std::fs::read_to_string(schema_path)
+            .map_err(|e| format!("Error {e}: While reading {schema_path:?}"))?);
+    }
+
+    let api_key = env::var("STEAM_API_KEY")
+        .or(env::var("DEMO_STEAM_API_KEY"))
+        .expect("STEAM_API_KEY must be set")
+        .to_string();
+    let client = Client::default();
+
+    let schema_url =
+        format!("https://api.steampowered.com/IEconItems_440/GetSchemaURL/v0001/?key={api_key}");
+    let mut response = client.get(schema_url).send().await?;
+    let body: ApiResponse<SchemaUrl> = response.json().await?;
+
+    let vdf_url = body.result.items_game_url;
+    let mut response = client.get(vdf_url).send().await?;
+    Ok(std::str::from_utf8(&response.body().await?)?.to_string())
+}
+
+pub async fn fetch() -> Result<Schema> {
+    let s = fetch_bytes().await?;
+    let v = keyvalues_serde::from_str_raw::<ItemsGameFile>(&s)?;
+
+    let mut schema = Schema {
+        items: Default::default(),
+        prefabs: v.prefabs,
+    };
+
+    let def = v
+        .items
+        .get("default")
+        .ok_or("Schema is missing default item entry")?
+        .clone();
+
+    for (k, i) in v.items {
+        if k == "default" {
+            continue;
+        }
+
+        let mut new_i = def.clone();
+        for p in i.prefab.iter().flat_map(|s| s.split(" ")) {
+            new_i.merge(schema.make_prefab(p));
+        }
+        new_i.merge(i);
+        schema.items.insert(k.parse::<u32>()?, new_i.into_item());
+    }
+
+    Ok(schema)
 }
