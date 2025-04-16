@@ -1,27 +1,42 @@
 use crate::{
     parser::{
+        entity::{self, Entity},
         game::{
-            DamageType, Death, PlayerCondition, RoundState, ENTITY_IN_WATER, ENTITY_ON_GROUND,
+            Damage, DamageEffect, DamageType, Death, PlayerAnimation, RoundState, WeaponId,
             INVALID_HANDLE,
         },
-        weapon::Weapon,
+        is_false, is_zero,
+        props::*,
+        stats::Stats,
+        weapon::{self, projectile_log_name, sentry_name, strip_prefix, taunt_log_name},
     },
     schema::{Attribute, Item, Schema},
+    Vec3,
 };
+use alga::linear::EuclideanSpace;
 use enumset::EnumSet;
+use nalgebra::Vector3;
+use num_enum::TryFromPrimitive;
+use rapier3d::prelude::{
+    ColliderBuilder, ColliderHandle, ColliderSet, Cuboid, IslandManager, QueryPipeline,
+    RigidBodySet,
+};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tf_demo_parser::{
     demo::{
         data::{DemoTick, UserInfo},
         gameevent_gen::{
-            ObjectDestroyedEvent, PlayerDeathEvent, PlayerHurtEvent, TeamPlayCaptureBlockedEvent,
+            PlayerDeathEvent, PlayerHurtEvent, TeamPlayCaptureBlockedEvent,
             TeamPlayPointCapturedEvent,
         },
         gamevent::GameEvent,
         message::{
             gameevent::GameEventMessage,
-            packetentities::{EntityId, PacketEntity},
+            packetentities::{EntityId, PacketEntity, UpdateType},
             Message, NetTickMessage,
         },
         packet::{
@@ -32,56 +47,60 @@ use tf_demo_parser::{
             gamestateanalyser::{Class, Team, UserId},
             MessageHandler,
         },
-        sendprop::{SendPropIdentifier, SendPropValue},
-        vector::{Vector, VectorXY},
+        sendprop::SendPropValue,
     },
     MessageType, ParserState, ReadResult, Stream,
 };
-use tracing::{debug, debug_span, error, info, span::EnteredSpan, trace, warn};
-
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct PlayerMeta {
-    pub name: String,
-    entity_id: u32,
-    pub user_id: u32,
-    pub steam_id: String,
-    //extra: u32, // all my sources say these 4 bytes don't exist
-    //friends_id: u32,
-    //friends_name_bytes: [u8; 32], // seem to all be 0 now
-    pub is_fake_player: bool,
-    pub is_hl_tv: bool,
-    pub is_replay: bool,
-    // pub custom_file: [u32; 4],
-    // pub files_downloaded: u32,
-    // pub more_extra: u8,
-}
+use tracing::{debug, error, span::EnteredSpan, trace, warn};
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct DemoSummary {
-    pub player_summaries: HashMap<UserId, PlayerSummary>,
-    pub deaths: Vec<PlayerDeath>,
+    pub players: Vec<PlayerSummary>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct PlayerDeath {}
 
-#[derive(Debug, Default)]
-pub struct WeaponState {
-    pub class: String,
-    pub charge: f32,
-    pub charge_released: bool,
-    pub id: u32,
+const ENTITY_COUNT: usize = 2048;
+
+#[derive(Clone, Debug)]
+pub struct Explosion {
+    pub projectile: Box<entity::Projectile>,
+    pub origin: Vec3,
+}
+
+#[derive(Clone, Debug)]
+pub struct SentryShot {
+    pub sentry: entity::Sentry,
 }
 
 #[derive(Debug)]
+pub enum HurtSource {
+    Explosion(Explosion),
+    NonBlastProjectile(Explosion), // crossbow, huntsman
+    SentryShot(SentryShot),
+    Unknown,
+}
+
+#[derive(Debug)]
+pub struct Hurt {
+    pub victim: UserId,
+    pub attacker: UserId,
+    pub wep: u32,
+    pub origin: Vec3,
+    pub source: HurtSource,
+}
+
 pub struct MatchAnalyzer<'a> {
-    state: DemoSummary,
-    user_entities: HashMap<EntityId, UserId>,
-    user_handles: HashMap<u32, UserId>,
+    player_summaries: HashMap<UserId, PlayerSummary>,
+    user_entities: HashMap<EntityId, UserId>, // entity_id -> user_id
     weapon_owners: HashMap<u32, UserId>,
-    weapon_handles: HashMap<u32, WeaponState>,
-    entity_handles: HashMap<EntityId, u32>, // Entity -> Handle lookup
-    users: BTreeMap<UserId, PlayerMeta>,
+    cosmetic_owners: HashMap<u32, UserId>,
+    entity_handles: HashMap<u32, EntityId>,
+    entities: Box<[Option<Box<dyn Entity>>; ENTITY_COUNT]>,
+    colliders: Box<[Option<ColliderHandle>; ENTITY_COUNT]>,
+
+    models: HashMap<u32, String>,
     waiting_for_players: bool,
     round_state: RoundState,
     span: Option<EnteredSpan>,
@@ -89,10 +108,55 @@ pub struct MatchAnalyzer<'a> {
     server_tick: u32,
     tick_events: Vec<Event>,
     schema: &'a Schema,
+
+    // Events that happened this tick
+    hurts: Vec<Hurt>,
+    sentry_shots: Vec<SentryShot>,
+    explosions: Vec<Explosion>,
+    airblasts: HashSet<u32>, // handles of players that airblasted this tick
+
+    // Queryable geometry world. QVBH under the hood.
+    world: QueryPipeline,
+    island_manager: IslandManager,
+    collider_set: ColliderSet,
+    rigid_body_set: RigidBodySet, // unused, but needed for some APIs :\
+    mutated_colliders: Vec<ColliderHandle>,
+    removed_colliders: Vec<ColliderHandle>,
+
+    weapon_class_ids: HashSet<ClassId>,
+    projectile_class_ids: HashSet<ClassId>,
+}
+
+pub struct MatchAnalyzerView<'a> {
+    pub user_entities: &'a HashMap<EntityId, UserId>,
+    pub models: &'a HashMap<u32, String>,
+    pub entities: &'a [Option<Box<dyn Entity>>; ENTITY_COUNT],
+    pub entity_handles: &'a HashMap<u32, EntityId>,
+    pub player_summaries: &'a mut HashMap<UserId, PlayerSummary>,
+    pub weapon_owners: &'a mut HashMap<u32, UserId>,
+    pub cosmetic_owners: &'a mut HashMap<u32, UserId>,
+    pub explosions: &'a mut Vec<Explosion>,
+    pub tick_events: &'a mut Vec<Event>,
+    pub schema: &'a Schema,
+    pub world: &'a QueryPipeline,
+    pub collider_set: &'a ColliderSet,
+    pub rigid_body_set: &'a RigidBodySet, // unused, but needed for some APIs :\
+    pub tick: DemoTick,
+}
+
+impl MatchAnalyzerView<'_> {
+    pub fn get_player(&self, id: &EntityId) -> Option<&entity::Player> {
+        self.entities
+            .get(usize::from(*id))
+            .and_then(|b| b.as_ref())
+            .and_then(|b| b.player())
+    }
 }
 
 #[derive(Debug)]
 pub enum Event {
+    Death(Box<PlayerDeathEvent>),
+    Hurt(PlayerHurtEvent),
     MedigunCharged(u32),
 }
 
@@ -106,14 +170,22 @@ pub struct Killstreak {
 // Med specific stats
 #[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct HealersSummary {
+    #[serde(skip_serializing_if = "is_zero")]
     pub preround_healing: u32,
+    #[serde(skip_serializing_if = "is_zero")]
     pub healing: u32,
+    #[serde(skip_serializing_if = "is_zero")]
     pub postround_healing: u32,
 
+    #[serde(skip_serializing_if = "is_zero")]
     pub drops: u32,
+    #[serde(skip_serializing_if = "is_zero")]
     pub near_full_charge_death: u32,
+    #[serde(skip_serializing_if = "is_zero")]
     pub charges_uber: u32,
+    #[serde(skip_serializing_if = "is_zero")]
     pub charges_kritz: u32,
+    #[serde(skip_serializing_if = "is_zero")]
     pub charges_quickfix: u32,
     // TODO:
     // pub charges_vacc: u32,
@@ -122,158 +194,16 @@ pub struct HealersSummary {
     // pub biggest_adv_lost: u32,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct Stats {
-    pub kills: u32,
-    pub assists: u32,
-    pub deaths: u32,
-    pub postround_kills: u32,
-    pub postround_assists: u32,
-    pub postround_deaths: u32,
-
-    // Dupes with HealersSummary to cover non-med healing
-    pub preround_healing: u32,
-    pub healing: u32,
-    pub postround_healing: u32,
-
-    pub damage: u32, // Added up PlayerHurt events
-    pub damage_taken: u32,
-
-    pub dominations: u32, // This player dominated another player
-    pub dominated: u32,   // Another player dominated this player
-    pub revenges: u32,    // This player got revenge on another player
-    pub revenged: u32,    // Another player got revenge on this player
-
-    // Kills where the victim was in the air for a decent amount of time.
-    // TOOD: clarify this definition
-    pub airshots: u32,
-
-    pub headshot_kills: u32,
-    pub backstab_kills: u32,
-
-    pub headshots: u32,
-    pub backstabs: u32,
-
-    pub was_headshot: u32,
-    pub was_backstabbed: u32,
-    // TODO
-    // pub shots: u32,
-    // pub hits: u32,
-}
-
-impl Stats {
-    pub fn handle_damage_dealt(&mut self, hurt: &PlayerHurtEvent, damage_type: DamageType) {
-        self.damage += hurt.damage_amount as u32;
-
-        if damage_type == DamageType::Backstab {
-            self.backstabs += 1;
-        } else if damage_type == DamageType::Headshot {
-            self.headshots += 1;
-        }
-    }
-
-    pub fn handle_damage_taken(&mut self, hurt: &PlayerHurtEvent, damage_type: DamageType) {
-        self.damage_taken += hurt.damage_amount as u32;
-
-        if damage_type == DamageType::Backstab {
-            self.was_backstabbed += 1;
-        } else if damage_type == DamageType::Headshot {
-            self.was_headshot += 1;
-        }
-    }
-
-    pub fn handle_death(&mut self, round_state: RoundState, flags: EnumSet<Death>) {
-        if flags.contains(Death::Domination) {
-            self.dominated += 1;
-        }
-        if flags.contains(Death::AssisterDomination) {
-            self.dominated += 1;
-        }
-        if flags.contains(Death::Revenge) {
-            self.revenged += 1;
-        }
-        if flags.contains(Death::AssisterRevenge) {
-            self.revenged += 1;
-        }
-
-        if flags.contains(Death::Feign) {
-            return;
-        }
-
-        if round_state == RoundState::TeamWin {
-            self.postround_deaths += 1;
-        } else {
-            self.deaths += 1;
-        }
-    }
-
-    pub fn handle_assist(&mut self, round_state: RoundState, flags: EnumSet<Death>) {
-        if flags.contains(Death::AssisterDomination) {
-            self.dominations += 1;
-        }
-        if flags.contains(Death::AssisterRevenge) {
-            self.revenges += 1;
-        }
-
-        if flags.contains(Death::Feign) {
-            return;
-        }
-
-        if round_state == RoundState::TeamWin {
-            self.postround_assists += 1;
-        } else {
-            self.assists += 1;
-        }
-    }
-
-    pub fn handle_kill(
-        &mut self,
-        round_state: RoundState,
-        flags: EnumSet<Death>,
-        damage_type: DamageType,
-        airshot: bool,
-    ) {
-        if flags.contains(Death::Domination) {
-            self.dominations += 1;
-        }
-        if flags.contains(Death::Revenge) {
-            self.revenges += 1;
-        }
-
-        if flags.contains(Death::Feign) {
-            return;
-        }
-
-        if round_state == RoundState::TeamWin {
-            self.postround_kills += 1;
-            return;
-        }
-
-        self.kills += 1;
-
-        if airshot {
-            self.airshots += 1;
-        }
-
-        if damage_type == DamageType::Backstab {
-            self.backstab_kills += 1;
-        } else if damage_type == DamageType::Headshot {
-            self.headshot_kills += 1;
-        }
-    }
-
-    pub fn handle_healing(&mut self, round_state: RoundState, amount: u32) {
-        if round_state == RoundState::TeamWin {
-            return;
-        }
-
-        if round_state == RoundState::PreRound {
-            self.preround_healing += amount;
-        } else if round_state == RoundState::TeamWin {
-            self.postround_healing += amount;
-        } else {
-            self.healing += amount;
-        }
+impl HealersSummary {
+    pub fn is_empty(&self) -> bool {
+        self.preround_healing == 0
+            && self.healing == 0
+            && self.postround_healing == 0
+            && self.drops == 0
+            && self.near_full_charge_death == 0
+            && self.charges_uber == 0
+            && self.charges_kritz == 0
+            && self.charges_quickfix == 0
     }
 }
 
@@ -283,34 +213,47 @@ pub struct PlayerSummary {
     pub steamid: String,
 
     pub team: Team,
-    pub time_start: u32, // ticks instead?
-    pub time_end: u32,
+    pub tick_start: Option<DemoTick>,
+    pub tick_end: Option<DemoTick>,
     pub points: Option<u32>,
     pub connection_count: u32,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bonus_points: Option<u32>,
 
     #[serde(flatten)]
     pub stats: Stats,
 
     pub classes: HashMap<Class, Stats>,
-    pub weapons: HashMap<Weapon, Stats>,
+    pub weapons: HashMap<String, Stats>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scoreboard_kills: Option<u32>,
+    #[serde(skip_serializing_if = "is_zero")]
     pub postround_kills: u32,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scoreboard_assists: Option<u32>, // Only present in PoV demos
+    #[serde(skip_serializing_if = "is_zero")]
     pub postround_assists: u32,
 
+    #[serde(skip_serializing_if = "is_zero")]
     pub suicides: u32,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scoreboard_deaths: Option<u32>,
+    #[serde(skip_serializing_if = "is_zero")]
     pub postround_deaths: u32,
 
+    #[serde(skip_serializing_if = "is_zero")]
     pub captures: u32,
+    #[serde(skip_serializing_if = "is_zero")]
     pub captures_blocked: u32,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scoreboard_damage: Option<u32>,
 
+    #[serde(skip_serializing_if = "HealersSummary::is_empty")]
     pub healing: HealersSummary,
 
     // TODO
@@ -323,70 +266,79 @@ pub struct PlayerSummary {
     //pub teleports: u32,
     //pub support: u32,
     //pub killstreaks: Vec<Killstreak>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub is_fake_player: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub is_hl_tv: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub is_replay: bool,
 
     // Flags for internal state tracking but unused elsewhere
     #[serde(skip)]
-    on_ground: bool,
+    pub entity_id: EntityId,
     #[serde(skip)]
-    in_water: bool,
+    pub user_id: u32,
     #[serde(skip)]
-    started_flying: DemoTick,
+    pub on_ground: bool,
     #[serde(skip)]
-    class: Class,
+    pub in_water: bool,
     #[serde(skip)]
-    health: u32,
+    pub started_flying: DemoTick,
+    #[serde(skip)]
+    pub class: Class,
+    #[serde(skip)]
+    pub health: u32,
 
     // Temporary stat for tracking healing score changes, not the
     // actual stat
     #[serde(skip)]
-    scoreboard_healing: u32,
+    pub scoreboard_healing: u32,
+
+    // TODO: Move this to always be read from the entity
+    #[serde(skip)]
+    pub origin: Vec3,
 
     #[serde(skip)]
-    sim_time: u32,
+    pub charge: f32, // ie med charge -- not wired to always be up to date!
     #[serde(skip)]
-    origin: Vector,
-    #[serde(skip)]
-    eye: VectorXY,
-    #[serde(skip)]
-    cond: EnumSet<PlayerCondition>,
-    #[serde(skip)]
-    cond_source: u32,
-    #[serde(skip)]
-    handle: u32,
-    #[serde(skip)]
-    active_weapon_handle: u32,
-    #[serde(skip)]
-    weapon_handles: Box<[u32; 7]>,
-    #[serde(skip)]
-    charge: f32, // ie med charge -- not wired to always be up to date!
-    #[serde(skip)]
-    kritzed: bool,
+    pub kritzed: bool,
 }
 
 impl PlayerSummary {
-    fn in_air(&self) -> bool {
+    pub fn in_air(&self) -> bool {
         !self.on_ground && !self.in_water
-    }
-
-    fn update_cond<const OFFSET: usize>(&mut self, bits: u32) {
-        let mask: u128 = 0xffffffff << OFFSET;
-        let new_cond = (self.cond.as_repr() & !mask) | ((bits as u128) << OFFSET);
-        self.cond = EnumSet::<PlayerCondition>::from_repr(new_cond);
-        trace!("Player {} condition now {:?}", self.name, self.cond);
     }
 
     fn class_stats(&mut self) -> &mut Stats {
         self.classes.entry(self.class).or_default()
     }
 
-    fn handle_damage_dealt(&mut self, hurt: &PlayerHurtEvent, damage_type: DamageType) {
-        self.stats.handle_damage_dealt(hurt, damage_type);
-        self.class_stats().handle_damage_dealt(hurt, damage_type);
+    fn weapon_stats(&mut self, weapon: &str) -> &mut Stats {
+        self.weapons.entry(weapon.into()).or_default()
     }
 
-    fn handle_damage_taken(&mut self, hurt: &PlayerHurtEvent, damage_type: DamageType) {
+    fn handle_damage_dealt(
+        &mut self,
+        weapon: &str,
+        hurt: &PlayerHurtEvent,
+        damage_type: DamageType,
+    ) {
+        self.stats.handle_damage_dealt(hurt, damage_type);
+        self.class_stats().handle_damage_dealt(hurt, damage_type);
+        self.weapon_stats(weapon)
+            .handle_damage_dealt(hurt, damage_type);
+    }
+
+    fn handle_damage_taken(
+        &mut self,
+        weapon: &str,
+        hurt: &PlayerHurtEvent,
+        damage_type: DamageType,
+    ) {
         self.stats.handle_damage_taken(hurt, damage_type);
         self.class_stats().handle_damage_taken(hurt, damage_type);
+        self.weapon_stats(weapon)
+            .handle_damage_taken(hurt, damage_type);
     }
 
     fn handle_assist(&mut self, round_state: RoundState, flags: EnumSet<Death>) {
@@ -397,6 +349,7 @@ impl PlayerSummary {
     fn handle_kill(
         &mut self,
         round_state: RoundState,
+        weapon: &str,
         flags: EnumSet<Death>,
         damage_type: DamageType,
         airshot: bool,
@@ -405,6 +358,8 @@ impl PlayerSummary {
             .handle_kill(round_state, flags, damage_type, airshot);
         self.class_stats()
             .handle_kill(round_state, flags, damage_type, airshot);
+        self.weapon_stats(weapon)
+            .handle_kill(round_state, flags, damage_type, airshot);
     }
 
     fn handle_death(&mut self, round_state: RoundState, flags: EnumSet<Death>) {
@@ -412,6 +367,7 @@ impl PlayerSummary {
             if self.charge == 1.0 {
                 self.healing.drops += 1;
             } else if self.charge > 0.95 {
+                // TODO: This should really be a continuos variable to be a more smooth metric
                 self.healing.near_full_charge_death += 1;
             }
         }
@@ -441,7 +397,7 @@ impl PlayerSummary {
     // weird edge cases like if hit by a pomson while switching or if
     // popping vacc while headed by another vacc. See if there is an
     // indicative anim event or sound effect?
-    fn handle_charged(&mut self, _medigun: &WeaponState, medigun_item: &Item) {
+    fn handle_charged(&mut self, medigun_item: &Item) {
         let charge_type = medigun_item
             .attributes
             .get("set_charge_type")
@@ -464,19 +420,32 @@ impl<'a> MatchAnalyzer<'a> {
     pub fn new(schema: &'a Schema) -> Self {
         Self {
             schema,
-            state: Default::default(),
+            player_summaries: Default::default(),
             user_entities: Default::default(),
-            user_handles: Default::default(),
             weapon_owners: Default::default(),
-            weapon_handles: Default::default(),
+            cosmetic_owners: Default::default(),
             entity_handles: Default::default(),
-            users: Default::default(),
+            entities: Box::new([const { None }; ENTITY_COUNT]),
+            colliders: Box::new([const { None }; ENTITY_COUNT]),
+            models: Default::default(),
             waiting_for_players: Default::default(),
             round_state: Default::default(),
             span: Default::default(),
             tick: Default::default(),
             server_tick: Default::default(),
             tick_events: Default::default(),
+            hurts: Default::default(),
+            sentry_shots: Default::default(),
+            explosions: Default::default(),
+            airblasts: Default::default(),
+            world: QueryPipeline::new(),
+            island_manager: IslandManager::new(),
+            collider_set: ColliderSet::with_capacity(ENTITY_COUNT),
+            rigid_body_set: RigidBodySet::with_capacity(0),
+            mutated_colliders: Vec::with_capacity(ENTITY_COUNT),
+            removed_colliders: Vec::with_capacity(ENTITY_COUNT),
+            projectile_class_ids: Default::default(),
+            weapon_class_ids: Default::default(),
         }
     }
 
@@ -489,31 +458,25 @@ impl<'a> MatchAnalyzer<'a> {
         if let Some(user_info) = UserInfo::parse_from_string_table(index as u16, text, data)? {
             let entity_id = user_info.entity_id;
             let id = user_info.player_info.user_id;
-            debug!("user info {} {id} {entity_id}", user_info.player_info.name);
+            trace!(
+                "user info {} {id} {entity_id} {user_info:?}",
+                user_info.player_info.name,
+            );
 
-            let new_user_info = user_info.clone();
-            self.users
+            self.player_summaries
                 .entry(id)
-                .and_modify(|info| {
-                    info.entity_id = new_user_info.entity_id.into();
+                .and_modify(|summary| {
+                    summary.connection_count += 1;
+                    summary.entity_id = user_info.entity_id;
                 })
-                .or_insert_with(|| PlayerMeta {
-                    name: new_user_info.player_info.name,
-                    entity_id: new_user_info.entity_id.into(),
-                    user_id: new_user_info.player_info.user_id.into(),
-                    steam_id: new_user_info.player_info.steam_id,
-                    is_fake_player: new_user_info.player_info.is_fake_player > 0,
-                    is_hl_tv: new_user_info.player_info.is_hl_tv > 0,
-                    is_replay: new_user_info.player_info.is_replay > 0,
-                });
-
-            self.state
-                .player_summaries
-                .entry(id)
-                .and_modify(|summary| summary.connection_count += 1)
                 .or_insert_with(|| PlayerSummary {
                     name: user_info.player_info.name,
                     steamid: user_info.player_info.steam_id,
+                    entity_id: user_info.entity_id,
+                    user_id: user_info.player_info.user_id.into(),
+                    is_fake_player: user_info.player_info.is_fake_player > 0,
+                    is_hl_tv: user_info.player_info.is_hl_tv > 0,
+                    is_replay: user_info.player_info.is_replay > 0,
                     ..Default::default()
                 });
 
@@ -521,6 +484,216 @@ impl<'a> MatchAnalyzer<'a> {
         }
 
         Ok(())
+    }
+
+    // Calculate weapon name in a player damage situation
+    //
+    // Note that damage_bits will only be provided for deaths.
+    pub fn weapon_name(
+        &self,
+        damage_type: DamageType,
+        damage_bits: EnumSet<Damage>,
+        victim: &entity::Player,
+        attacker: &entity::Player,
+        hurt: Option<&Hurt>,
+    ) -> &'static str {
+        let mut my_name: &'static str = "UNKNOWN";
+
+        let dmg_to_victim: Vec<_> = hurt.map(|h| vec![h]).unwrap_or_else(|| {
+            self.hurts
+                .iter()
+                .filter(|h| h.victim == victim.user_id)
+                .collect::<Vec<&Hurt>>()
+        });
+
+        let h = attacker.last_active_weapon_handle;
+        if let Some(weapon) = self.get_weapon(&h) {
+            if let Some(v) = self.schema.items.get(&weapon.schema_id) {
+                my_name = v
+                    .item_logname
+                    .as_ref()
+                    .map(|s| ustr::ustr(s).as_str())
+                    .or(v
+                        .item_class
+                        .as_deref()
+                        .map(strip_prefix)
+                        .map(|s| ustr::ustr(s).as_str()))
+                    .map(|s| weapon::log_name(s, attacker.class))
+                    .unwrap_or("UNKNOWN");
+            } else {
+                error!("Weapon id not in schema! {}", weapon.schema_id);
+            }
+        } else {
+            error!("Player has unknown weapon handle: {h}");
+        }
+
+        if let Some(sentry_hurt) = dmg_to_victim
+            .iter()
+            .find(|h| matches!(h.source, HurtSource::SentryShot(_)))
+        {
+            let HurtSource::SentryShot(ref sentry_shot) = sentry_hurt.source else {
+                error!("impossible match mi ss");
+                return "UNKNOWN";
+            };
+            trace!("sentry shot {sentry_shot:?}");
+            my_name = sentry_name(&sentry_shot.sentry);
+        }
+
+        if let Some(sentry_hurt) = dmg_to_victim
+            .iter()
+            .find(|h| matches!(h.source, HurtSource::NonBlastProjectile(_)))
+        {
+            let HurtSource::NonBlastProjectile(ref exp) = sentry_hurt.source else {
+                panic!("impossible match miss");
+            };
+            let item = exp
+                .projectile
+                .launcher_schema_id
+                .and_then(|id| self.schema.items.get(&id));
+            my_name = projectile_log_name(&exp.projectile, &victim.team, item);
+        } else if (damage_bits.contains(Damage::Blast)
+            || damage_type == DamageType::BurningFlare
+            || damage_type == DamageType::Plasma
+            || damage_type == DamageType::PlasmaCharged
+            || damage_type == DamageType::DefensiveSticky
+            || damage_type == DamageType::AirStickyBurst
+            || damage_type == DamageType::RocketDirecthit
+            || damage_type == DamageType::StandardSticky
+            || damage_type == DamageType::Normal)
+            && damage_type != DamageType::Baseball
+            && damage_type != DamageType::Headshot
+            && damage_type != DamageType::HeadshotDecapitation
+            && damage_type != DamageType::Suicide
+            && damage_type != DamageType::CannonballPush
+            && damage_type != DamageType::TauntGrenade
+            && damage_type != DamageType::TauntEngineerArmKill
+            && damage_type != DamageType::StickbombExplosion
+        {
+            let Some(attacker_handle) = attacker.handle() else {
+                error!("No attacker handle for death");
+                return "UNKNOWN";
+            };
+
+            let mut exps: Vec<_> = dmg_to_victim
+                .iter()
+                .filter_map(|h| {
+                    if let HurtSource::Explosion(e) = &h.source {
+                        if e.projectile.owner() == Some(attacker_handle)
+                            || e.projectile.original_owner == attacker_handle
+                            || self.airblasts.contains(&attacker_handle)
+                        {
+                            return Some(e);
+                        }
+                    }
+                    None
+                })
+                .collect();
+
+            if exps.len() > 1 {
+                trace!("blast with many exps {:?}", exps);
+                exps.drain(1..);
+            }
+
+            if let Some(ref exp) = exps.first() {
+                trace!("blast with exp {:?}", exp);
+
+                let item = exp
+                    .projectile
+                    .launcher_schema_id
+                    .and_then(|id| self.schema.items.get(&id));
+
+                my_name = projectile_log_name(&exp.projectile, &victim.team, item);
+            } else if damage_bits.contains(Damage::Blast) && damage_type != DamageType::BurningFlare
+            {
+                let d = EuclideanSpace::distance(&attacker.origin, &victim.origin);
+                if d > 100.0 {
+                    // "Blast" damage can happen without a projectile in these cases:
+                    //  - flare-caused burning
+                    //  - if projectile impacts and explodes on the first tick, no
+                    //    projectile entity is created.
+                    error!(
+												"Blast damage without a matching explosion type:{damage_type:?} (distance {d})"
+										);
+                }
+            }
+        }
+
+        if let Some(taunt) = taunt_log_name(damage_type) {
+            my_name = taunt;
+        } else if damage_type == DamageType::DragonsFuryBonusBurning {
+            my_name = "dragons_fury_bonus";
+        } else if damage_type == DamageType::Burning {
+            my_name = self
+                .get_weapon(&attacker.weapon_handles[0])
+                .and_then(|w| self.schema.items.get(&w.schema_id))
+                .and_then(|i| i.item_logname.as_ref().map(|s| ustr::ustr(s).as_str()))
+                .unwrap_or("flamethrower");
+        } else if damage_type == DamageType::BurningArrow {
+            my_name = self
+                .get_weapon(&attacker.weapon_handles[0])
+                .and_then(|w| self.schema.items.get(&w.schema_id))
+                .and_then(|i| i.item_logname.as_ref().map(|s| ustr::ustr(s).as_str()))
+                .unwrap_or("compound_bow");
+        } else if damage_type == DamageType::BurningFlare {
+            my_name = self
+                .get_weapon(&attacker.weapon_handles[1])
+                .and_then(|w| self.schema.items.get(&w.schema_id))
+                .and_then(|i| i.item_logname.as_ref().map(|s| ustr::ustr(s).as_str()))
+                .unwrap_or("flaregun");
+        } else if damage_type == DamageType::ChargeImpact {
+            if let Some(shield_logname) = attacker.cosmetic_handles.iter().find_map(|h| {
+                self.entity_handles
+                    .get(h)
+                    .and_then(|eid| self.entities.get(usize::from(*eid)))
+                    .and_then(|b| b.as_ref())
+                    .and_then(|b| b.shield())
+                    .and_then(|s| self.schema.items.get(&s.schema_id))
+                    .and_then(|s| s.item_logname.as_ref().map(|s| ustr::ustr(s).as_str()))
+            }) {
+                my_name = shield_logname;
+            } else {
+                error!("Chart impact without a shield?!")
+            }
+        } else if damage_type == DamageType::PlayerSentry {
+            my_name = "wrangler_kill";
+        } else if damage_type == DamageType::Baseball {
+            my_name = "ball";
+        } else if damage_type == DamageType::ComboPunch {
+            my_name = "robot_arm_combo_kill";
+        } else if damage_type == DamageType::CannonballPush {
+            my_name = "loose_cannon_impact";
+        } else if damage_type == DamageType::BootsStomp {
+            my_name = match attacker.class {
+                Class::Soldier => "mantreads",
+                Class::Pyro => "rocketpack_stomp",
+                _ => {
+                    error!("Unknown how class {:?} can stomp", attacker.class);
+                    "mantreads"
+                }
+            };
+        } else if damage_type == DamageType::Telefrag {
+            my_name = "telefrag";
+        } else if damage_type == DamageType::DefensiveSticky {
+            my_name = "sticky_resistance";
+        } else if damage_type == DamageType::StickbombExplosion {
+            my_name = "ullapool_caber_explosion";
+        } else if damage_type == DamageType::Bleeding {
+            my_name = "bleed_kill";
+        } else if dmg_to_victim.is_empty() || damage_type == DamageType::Suicide {
+            if dmg_to_victim.is_empty() && damage_type != DamageType::Suicide {
+                error!("No hurts for non-suicide???");
+            }
+
+            my_name = if damage_bits.contains(Damage::PreventPhysicsForce) {
+                // Player suicided with a killbind, either kill or explode (Can
+                // filter on Damage::Blast if we ever care about distinguishing
+                // those.)
+                "player"
+            } else {
+                "world"
+            };
+        }
+        my_name
     }
 
     fn handle_packet_entity(&mut self, packet: &PacketEntity, parser_state: &ParserState) {
@@ -532,269 +705,195 @@ impl<'a> MatchAnalyzer<'a> {
             return;
         };
 
-        match class.name.as_str() {
-            "CTFPlayer" => self.handle_player_entity(packet, parser_state),
-            "CTFPlayerResource" => self.handle_player_resource(packet, parser_state),
-            "CTFGameRulesProxy" => self.handle_game_rules(packet, parser_state),
-            _ => {
-                trace!(
-                    "Unhandled PacketEntity: {:?} {:?}",
-                    packet,
-                    class.name.as_str()
-                );
-            }
+        let eid = usize::from(packet.entity_index);
+
+        let class_name = class.name.as_str();
+        let is_projectile = self.projectile_class_ids.contains(&packet.server_class);
+        let is_weapon = self.weapon_class_ids.contains(&packet.server_class);
+
+        // Trace runs are really slow so skip at least some of the noise
+        if class_name != "CBoneFollower"
+            && class_name != "CBeam"
+            && class_name != "CTFAmmoPack"
+            && class_name != "CSniperDot"
+            && class_name != "CTFDroppedWeapon"
+            && class_name != "CBaseDoor"
+            && !(class_name == "CTFPlayer"
+                && packet.update_type == UpdateType::Preserve
+                && packet.props.len() == 1
+                && packet.props[0].identifier == SIM_TIME)
+        {
+            trace!("Packet {class_name} {:?} {packet:?}", packet.update_type);
         }
 
-        const MEDIGUN_CHARGE_LEVEL: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFWeaponMedigunDataNonLocal", "m_flChargeLevel");
-        const MEDIGUN_CHARGE_RELEASED: SendPropIdentifier =
-            SendPropIdentifier::new("DT_WeaponMedigun", "m_bChargeRelease");
-        const SELF_HANDLE: SendPropIdentifier =
-            SendPropIdentifier::new("DT_AttributeContainer", "m_hOuter");
-        const ITEM_DEFINITION: SendPropIdentifier =
-            SendPropIdentifier::new("DT_ScriptCreatedItem", "m_iItemDefinitionIndex");
-
-        let mut handle: Option<u32> = None;
-        let mut charge: Option<f32> = None;
-        let mut charge_released: Option<bool> = None;
-        let mut id: Option<u32> = None;
-        for prop in packet.props(parser_state) {
-            match (prop.identifier, &prop.value) {
-                (MEDIGUN_CHARGE_LEVEL, &SendPropValue::Float(z)) => {
-                    charge = Some(z);
-                }
-                (MEDIGUN_CHARGE_RELEASED, &SendPropValue::Integer(b)) => {
-                    charge_released = Some(b == 1)
-                }
-                (SELF_HANDLE, &SendPropValue::Integer(h)) => handle = Some(h as u32),
-                (ITEM_DEFINITION, &SendPropValue::Integer(x)) => id = Some(x as u32),
-                _ => {}
-            }
-        }
-
-        let mut existing_handle = self.entity_handles.get(&packet.entity_index).copied();
-
-        if let Some(handle) = handle {
-            self.entity_handles.insert(packet.entity_index, handle);
-            existing_handle = Some(handle);
-        }
-
-        if let Some(handle) = existing_handle {
-            let wep = self.weapon_handles.entry(handle).or_default();
-            if let Some(charge) = charge {
-                wep.charge = charge;
-            }
-            if let Some(charge_released) = charge_released {
-                if charge_released && wep.charge_released == false {
-                    self.tick_events.push(Event::MedigunCharged(handle));
-                }
-                wep.charge_released = charge_released;
-            }
-            if let Some(id) = id {
-                wep.id = id;
-            }
-            wep.class = class.name.to_string();
-        } else {
-            if charge.is_some() {
-                error!("Could not find weapon handle for medigun {packet:?}");
-            }
-        }
-    }
-
-    fn handle_player_entity(&mut self, entity: &PacketEntity, _parser_state: &ParserState) {
-        // These DT_TFPlayerScoringDataExclusive props are only present in PoV demos, not STV demos.
-        //
-        // Other fields: m_iDominations, m_iRevenge,
-        // m_iBuildingsDestroyed, m_iHeadshots, m_iBackstabs,
-        // m_iHealPoints, m_iInvulns, m_iTeleports, m_iDamageDone,
-        // m_iBonusPoints, m_iPoints, m_iCaptures, m_iDefenses
-        const KILLS: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFPlayerScoringDataExclusive", "m_iKills");
-        const DEATHS: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFPlayerScoringDataExclusive", "m_iDeaths");
-        const KILL_ASSISTS: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFPlayerScoringDataExclusive", "m_iKillAssists");
-
-        // Props that always are available
-        const FLAGS: SendPropIdentifier = SendPropIdentifier::new("DT_BasePlayer", "m_fFlags");
-        const HEALTH: SendPropIdentifier = SendPropIdentifier::new("DT_BasePlayer", "m_iHealth");
-        const CLASS: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFPlayerClassShared", "m_iClass");
-        const SIM_TIME: SendPropIdentifier =
-            SendPropIdentifier::new("DT_BaseEntity", "m_flSimulationTime");
-
-        const ORIGIN_XY: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_vecOrigin");
-        const ORIGIN_Z: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_vecOrigin[2]");
-
-        const EYE_X: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_angEyeAngles[0]");
-        const EYE_Y: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", "m_angEyeAngles[1]");
-
-        const HANDLE: SendPropIdentifier =
-            SendPropIdentifier::new("DT_AttributeManager", "m_hOuter");
-
-        const COND_0: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFPlayerShared", "m_nPlayerCond");
-        const COND_1: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFPlayerShared", "m_nPlayerCondEx");
-        const COND_2: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFPlayerShared", "m_nPlayerCondEx2");
-        const COND_3: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFPlayerShared", "m_nPlayerCondEx3");
-
-        // Separate condition bits
-        // TODO: seems to only be used for Kritzkreig?
-        const COND_BITS: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFPlayerConditionListExclusive", "_condition_bits");
-
-        const COND_SOURCE: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TFPlayerConditionSource", "m_pProvider");
-
-        const ACTIVE_WEAPON_HANDLE: SendPropIdentifier =
-            SendPropIdentifier::new("DT_BaseCombatCharacter", "m_hActiveWeapon");
-
-        const WEP_0: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "000");
-        const WEP_1: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "001");
-        const WEP_2: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "002");
-        const WEP_3: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "003");
-        const WEP_4: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "004");
-        const WEP_5: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "005");
-        const WEP_6: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "006");
-        const WEP_7: SendPropIdentifier = SendPropIdentifier::new("m_hMyWeapons", "007");
-
-        let entity_id = &entity.entity_index;
-        let Some(user_id) = self.user_entities.get(entity_id) else {
-            error!("Unknown player entity id: {entity_id}");
+        if class_name == "CTFPlayerResource" {
+            self.handle_player_resource(packet, parser_state);
             return;
-        };
-
-        let Some(summary) = self.state.player_summaries.get_mut(user_id) else {
-            error!("Unknown player user id: {}", user_id);
+        }
+        if class_name == "CTFGameRulesProxy" {
+            self.handle_game_rules(packet, parser_state);
             return;
-        };
+        }
 
-        for prop in &entity.props {
-            match (prop.identifier, &prop.value) {
-                (KILLS, SendPropValue::Integer(val)) => {
-                    summary.scoreboard_kills = Some(*val as u32);
-                }
-                (KILL_ASSISTS, SendPropValue::Integer(val)) => {
-                    // PoV demos include multiple different copies of
-                    // this field -- maybe per round stats? We want
-                    // the larger one.
-                    summary.scoreboard_assists =
-                        Some(summary.scoreboard_assists.unwrap_or(0).max(*val as u32));
-                }
-                (DEATHS, SendPropValue::Integer(val)) => {
-                    summary.scoreboard_deaths = Some(*val as u32);
-                }
-                (FLAGS, SendPropValue::Integer(val)) => {
-                    let was_in_air = summary.in_air();
+        match packet.update_type {
+            UpdateType::Enter => {
+                let mut ma = MatchAnalyzerView {
+                    user_entities: &self.user_entities,
+                    models: &self.models,
+                    entities: &self.entities,
+                    entity_handles: &self.entity_handles,
+                    player_summaries: &mut self.player_summaries,
+                    weapon_owners: &mut self.weapon_owners,
+                    cosmetic_owners: &mut self.cosmetic_owners,
+                    explosions: &mut self.explosions,
+                    tick_events: &mut self.tick_events,
+                    schema: self.schema,
+                    world: &self.world,
+                    collider_set: &self.collider_set,
+                    rigid_body_set: &self.rigid_body_set,
+                    tick: self.tick,
+                };
 
-                    let flags = *val as u16;
-                    summary.on_ground = flags & ENTITY_ON_GROUND != 0;
-                    summary.in_water = flags & ENTITY_IN_WATER != 0;
-
-                    let now_in_air = summary.in_air();
-
-                    if !was_in_air && now_in_air {
-                        summary.started_flying = self.tick;
+                let e: Box<dyn Entity> = match class_name {
+                    "CObjectSentrygun" => {
+                        Box::new(entity::Sentry::new(packet, parser_state, &mut ma))
                     }
+                    "CTFPlayer" => Box::new(entity::Player::new(packet, parser_state, &mut ma)),
+                    "CTFWearableDemoShield" => {
+                        Box::new(entity::Shield::new(packet, parser_state, &mut ma))
+                    }
+                    _ if is_projectile => {
+                        Box::new(entity::Projectile::new(packet, parser_state, &mut ma))
+                    }
+                    _ if is_weapon => Box::new(entity::Weapon::new(packet, parser_state, &mut ma)),
+                    _ => Box::new(entity::Unknown::new(packet, parser_state, &mut ma)),
+                };
+                self.entities[eid] = Some(e);
+            }
+            UpdateType::Preserve => {
+                let Some(ref e) = self.entities[eid] else {
+                    error!(
+                        "Preserve update for unknown entity {} in {:?}",
+                        packet.entity_index, packet
+                    );
+                    return;
+                };
+
+                let mut ma = MatchAnalyzerView {
+                    user_entities: &self.user_entities,
+                    models: &self.models,
+                    entities: &self.entities,
+                    entity_handles: &self.entity_handles,
+                    player_summaries: &mut self.player_summaries,
+                    weapon_owners: &mut self.weapon_owners,
+                    cosmetic_owners: &mut self.cosmetic_owners,
+                    explosions: &mut self.explosions,
+                    tick_events: &mut self.tick_events,
+                    schema: self.schema,
+                    world: &self.world,
+                    collider_set: &self.collider_set,
+                    rigid_body_set: &self.rigid_body_set,
+                    tick: self.tick,
+                };
+
+                let update = e.parse_preserve(packet, parser_state, &mut ma);
+
+                let e = self.entities[eid].as_mut().unwrap(); // safety: checked above
+
+                e.apply_preserve(update);
+            }
+            UpdateType::Delete | UpdateType::Leave => {
+                if !packet.props.is_empty() {
+                    error!(
+                        "Unexpect props on {:?} update: {:?}",
+                        packet.update_type, packet.props
+                    );
                 }
-                (CLASS, SendPropValue::Integer(val)) => {
-                    let Ok(class) = Class::try_from(*val as u8) else {
-                        error!("Unknown classid {val}");
-                        continue;
+
+                let e = std::mem::take(&mut self.entities[eid]);
+                let Some(e) = e else {
+                    error!(
+                        "{:?} for unknown entity {} from {:?}",
+                        packet.update_type, packet.entity_index, packet
+                    );
+                    return;
+                };
+
+                let mut ma = MatchAnalyzerView {
+                    user_entities: &self.user_entities,
+                    models: &self.models,
+                    entities: &self.entities,
+                    entity_handles: &self.entity_handles,
+                    player_summaries: &mut self.player_summaries,
+                    weapon_owners: &mut self.weapon_owners,
+                    cosmetic_owners: &mut self.cosmetic_owners,
+                    explosions: &mut self.explosions,
+                    tick_events: &mut self.tick_events,
+                    schema: self.schema,
+                    world: &self.world,
+                    collider_set: &self.collider_set,
+                    rigid_body_set: &self.rigid_body_set,
+                    tick: self.tick,
+                };
+
+                if packet.update_type == UpdateType::Delete {
+                    e.delete(&mut ma);
+                } else {
+                    e.leave(&mut ma);
+                }
+
+                let k = std::mem::take(&mut self.colliders[eid]);
+                if let Some(k) = k {
+                    self.collider_set.remove(
+                        k,
+                        &mut self.island_manager,
+                        &mut self.rigid_body_set,
+                        false,
+                    );
+                    self.removed_colliders.push(k);
+                }
+
+                self.entities[eid] = None;
+                self.colliders[eid] = None;
+                return;
+            }
+        }
+
+        if let Some(e) = &self.entities[eid] {
+            if let Some(h) = e.handle() {
+                self.entity_handles.insert(h, EntityId::from(eid as u32));
+            }
+
+            if let (Some(shape), Some(origin)) = (e.shape(), e.origin()) {
+                if let Some(collider) = self.colliders[eid] {
+                    let Some(c) = self.collider_set.get_mut(collider) else {
+                        error!("Colliders out of sync: missing collider for: {eid:?} {packet:?}");
+                        return;
                     };
-                    summary.class = class;
-                }
-                (HEALTH, SendPropValue::Integer(val)) => {
-                    summary.health = *val as u32;
-                }
-                (SIM_TIME, SendPropValue::Integer(val)) => {
-                    summary.sim_time = *val as u32;
-                }
 
-                (ORIGIN_XY, SendPropValue::VectorXY(vec)) => {
-                    summary.origin.x = vec.x;
-                    summary.origin.y = vec.y;
-                }
-                (ORIGIN_Z, &SendPropValue::Float(z)) => summary.origin.z = z,
-
-                (EYE_X, &SendPropValue::Float(x)) => summary.eye.x = x,
-                (EYE_Y, &SendPropValue::Float(y)) => summary.eye.y = y,
-
-                (HANDLE, &SendPropValue::Integer(h)) => {
-                    trace!("player ({}) has handle {h}", summary.name);
-                    summary.handle = h as u32;
-                    self.user_handles.insert(h as u32, *user_id);
-                }
-                (COND_SOURCE, &SendPropValue::Integer(x)) => summary.cond_source = x as u32,
-
-                (COND_0, &SendPropValue::Integer(x)) => summary.update_cond::<0>(x as u32),
-                (COND_1, &SendPropValue::Integer(x)) => summary.update_cond::<32>(x as u32),
-                (COND_2, &SendPropValue::Integer(x)) => summary.update_cond::<64>(x as u32),
-                (COND_3, &SendPropValue::Integer(x)) => summary.update_cond::<96>(x as u32),
-
-                (COND_BITS, &SendPropValue::Integer(x)) => {
-                    if x == 0 || x == 2048 {
-                        summary.kritzed = x == 2048;
-                    } else {
-                        error!("Unknown _condition_bits: {x}");
+                    if c.user_data != (eid as u128) {
+                        error!("Colliders out of sync: id mismatch: {eid:?} {packet:?}");
                     }
-                }
 
-                (ACTIVE_WEAPON_HANDLE, &SendPropValue::Integer(x)) => {
-                    let h = x as u32;
-                    if h == INVALID_HANDLE {
-                        continue;
+                    // These setters trigger dirty bits for extra processing, so it is worth
+                    // the explicit change detection here.
+                    //
+                    // Due to https://github.com/dimforge/parry/issues/51 we use ptr_eq and
+                    // rely on shapes being statics; revisit this for performance if an
+                    // entity ever dynamically computes its shape on every tick.
+                    if Arc::ptr_eq(&c.shared_shape().0, &shape.0) {
+                        c.set_shape(shape);
                     }
-                    summary.active_weapon_handle = h;
-                    self.weapon_owners.insert(h, *user_id);
-                }
-
-                (WEP_0, &SendPropValue::Integer(x)) => {
-                    let handle = x as u32;
-                    summary.weapon_handles[0] = handle;
-                    self.weapon_owners.insert(handle, *user_id);
-                }
-                (WEP_1, &SendPropValue::Integer(x)) => {
-                    let handle = x as u32;
-                    summary.weapon_handles[1] = handle;
-                    self.weapon_owners.insert(handle, *user_id);
-                }
-                (WEP_2, &SendPropValue::Integer(x)) => {
-                    let handle = x as u32;
-                    summary.weapon_handles[2] = handle;
-                    self.weapon_owners.insert(handle, *user_id);
-                }
-                (WEP_3, &SendPropValue::Integer(x)) => {
-                    let handle = x as u32;
-                    summary.weapon_handles[3] = handle;
-                    self.weapon_owners.insert(handle, *user_id);
-                }
-                (WEP_4, &SendPropValue::Integer(x)) => {
-                    let handle = x as u32;
-                    summary.weapon_handles[4] = handle;
-                    self.weapon_owners.insert(handle, *user_id);
-                }
-                (WEP_5, &SendPropValue::Integer(x)) => {
-                    let handle = x as u32;
-                    summary.weapon_handles[5] = handle;
-                    self.weapon_owners.insert(handle, *user_id);
-                }
-                (WEP_6, &SendPropValue::Integer(x)) => {
-                    let handle = x as u32;
-                    summary.weapon_handles[6] = handle;
-                    self.weapon_owners.insert(handle, *user_id);
-                }
-                (WEP_7, &SendPropValue::Integer(_)) => error!("Unexpected 8th weapons"),
-
-                _ => {
-                    trace!("Unhandled player ({}) entity prop {prop:?}", summary.name);
+                    if c.position().translation != origin.into() {
+                        c.set_position(origin.into());
+                    }
+                    self.mutated_colliders.push(collider);
+                } else {
+                    let mut c = ColliderBuilder::new(shape).position(origin.into()).build();
+                    c.user_data = eid as u128;
+                    let k = self.collider_set.insert(c);
+                    self.mutated_colliders.push(k);
+                    self.colliders[eid] = Some(k);
                 }
             }
         }
@@ -810,7 +909,7 @@ impl<'a> MatchAnalyzer<'a> {
             if let Ok(player_id) = prop_name.as_str().parse::<u32>() {
                 let entity_id = EntityId::from(player_id);
                 if let Some(user_id) = self.user_entities.get(&entity_id) {
-                    if let Some(player) = self.state.player_summaries.get_mut(user_id) {
+                    if let Some(player) = self.player_summaries.get_mut(user_id) {
                         match table_name.as_str() {
                             "m_iTeam" => {}
                             "m_iHealing" => {
@@ -821,7 +920,8 @@ impl<'a> MatchAnalyzer<'a> {
                                 }
                                 let h = hi as u32;
 
-                                // Skip the first real value; sometimes STV starts a little late and we can't distinguish the healing values.
+                                // Skip the first real value; sometimes STV starts a little late and
+                                // we can't distinguish the healing values.
                                 if player.scoreboard_healing == 0 {
                                     player.scoreboard_healing = h;
                                     return;
@@ -830,7 +930,8 @@ impl<'a> MatchAnalyzer<'a> {
                                 // Add up deltas, as this tracker resets to 0 mid round.
                                 let dh = h.saturating_sub(player.scoreboard_healing);
                                 if dh > 300 {
-                                    // Never saw a delta this large in our corpus; may be a sign of a miscount
+                                    // Never saw a delta this large in our corpus; may be a sign of
+                                    // a miscount
                                     warn!("Huge healing delta of {dh} by {}", player.name);
                                 }
 
@@ -896,11 +997,6 @@ impl<'a> MatchAnalyzer<'a> {
     }
 
     pub fn handle_game_rules(&mut self, entity: &PacketEntity, _parser_state: &ParserState) {
-        const WAITING_FOR_PLAYERS: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TeamplayRoundBasedRules", "m_bInWaitingForPlayers");
-        const ROUND_STATE: SendPropIdentifier =
-            SendPropIdentifier::new("DT_TeamplayRoundBasedRules", "m_iRoundState");
-
         for prop in &entity.props {
             match (prop.identifier, &prop.value) {
                 (WAITING_FOR_PLAYERS, SendPropValue::Integer(x)) => {
@@ -916,6 +1012,38 @@ impl<'a> MatchAnalyzer<'a> {
                 }
             }
         }
+    }
+
+    pub fn get_entity_by_handle(&self, handle: &u32) -> Option<&dyn Entity> {
+        self.entity_handles
+            .get(handle)
+            .and_then(|eid| self.entities.get(usize::from(*eid)).map(|b| b.as_ref()))
+            .flatten()
+            .map(|v| &**v)
+    }
+
+    pub fn get_entity(&self, eid: impl Into<usize>) -> Option<&dyn Entity> {
+        self.entities
+            .get(eid.into())
+            .and_then(|b: &_| b.as_ref())
+            .map(|v| &**v)
+    }
+
+    pub fn get_weapon(&self, handle: &u32) -> Option<&entity::Weapon> {
+        self.get_entity_by_handle(handle).and_then(|e| {
+            let z = e.weapon();
+            if z.is_none() {
+                error!("weapon handle {handle} in the map but entity is not a weapon {e:?}");
+            }
+            z
+        })
+    }
+
+    pub fn get_player(&self, id: &EntityId) -> Option<&entity::Player> {
+        self.entities
+            .get(usize::from(*id))
+            .and_then(|b| b.as_ref())
+            .and_then(|b| b.player())
     }
 
     pub fn handle_player_death(&mut self, death: &PlayerDeathEvent) {
@@ -944,11 +1072,16 @@ impl<'a> MatchAnalyzer<'a> {
             DamageType::Normal
         });
 
+        let damage_bits =
+            EnumSet::<Damage>::try_from_repr(death.damage_bits).unwrap_or_else(|| {
+                error!("Unknown damage bits: {}", death.damage_bits);
+                EnumSet::<Damage>::new()
+            });
+
         let feigned = flags.contains(Death::Feign);
 
         if death.user_id == death.attacker {
             let Some(suicider) = self
-                .state
                 .player_summaries
                 .get_mut(&UserId::from(death.attacker as u32))
             else {
@@ -961,8 +1094,21 @@ impl<'a> MatchAnalyzer<'a> {
             return;
         }
 
+        let victim_id = UserId::from(death.user_id as u32);
+        let Some(victim) = self.player_summaries.get(&victim_id) else {
+            error!("Unknown victim id: {}", death.user_id);
+            return;
+        };
+        let victim_eid = victim.entity_id;
+        let Some(victim_e) = self.get_player(&victim.entity_id) else {
+            error!("No victim entity: {}", victim.entity_id);
+            return;
+        };
+        let medigun_h = victim_e.weapon_handles[1];
+
+        let charge = self.get_weapon(&medigun_h).map(|w| w.last_high_charge);
+
         let Some(victim) = self
-            .state
             .player_summaries
             .get_mut(&UserId::from(death.user_id as u32))
         else {
@@ -974,11 +1120,10 @@ impl<'a> MatchAnalyzer<'a> {
         // just do this more broadly and move the death event to
         // on_tick
         if victim.class == Class::Medic {
-            let medigun_h = victim.weapon_handles[1];
-            if let Some(medigun) = self.weapon_handles.get(&medigun_h) {
-                victim.charge = medigun.charge;
+            if let Some(charge) = charge {
+                victim.charge = charge;
             } else {
-                error!("Med died without a secondary {medigun_h}");
+                error!("Med died without a secondary {medigun_h} {victim:?}");
             }
         }
 
@@ -989,36 +1134,69 @@ impl<'a> MatchAnalyzer<'a> {
         let airshot = victim.in_air() && (self.tick - victim.started_flying > 16);
 
         let attacker_is_world = death.attacker == 0;
+        let attacker_is_world_wep = death.weapon_def_index == 0xffff;
+        if attacker_is_world || attacker_is_world_wep {
+            // attacker_is_world != attacker_is_world2 can happen when
+            // a player gets an assist / "finished by" kill (eg do
+            // damage to someone then they fall off world or die to
+            // game end explosion).
+            return;
+        }
+
         let attacker = self
-            .state
             .player_summaries
-            .get_mut(&UserId::from(death.attacker as u32));
-        if let Some(attacker) = attacker {
-            if !feigned {
-                if self.round_state == RoundState::TeamWin {
-                    attacker.postround_kills += 1;
-                } else {
-                    if airshot {
-                        debug!("airshot by {}!", attacker.name);
-                    }
-                    let h = attacker.active_weapon_handle;
-                    if let Some(wep) = self.weapon_handles.get(&h) {
-                        info!(
-                            "death with {} / {} vs entity: {} / {}",
-                            death.weapon, death.weapon_log_class_name, wep.class, wep.id
-                        );
-                    } else {
-                        info!(
-                            "death with {} / {} but unknown player weapon handle: {h}",
-                            death.weapon, death.weapon_log_class_name
-                        );
-                    }
-                    attacker.handle_kill(self.round_state, flags, damage_type, airshot);
-                }
-            }
-        } else if !attacker_is_world {
+            .get(&UserId::from(death.attacker as u32));
+
+        if feigned {
+            return;
+        }
+
+        let Some(attacker) = attacker else {
             error!("Unknown attacker id: {}", death.attacker);
             return;
+        };
+
+        if self.round_state == RoundState::TeamWin {
+            let attacker = self
+                .player_summaries
+                .get_mut(&UserId::from(death.attacker as u32))
+                .unwrap();
+            attacker.postround_kills += 1;
+        } else {
+            if airshot {
+                debug!("airshot by {}!", attacker.name);
+            }
+            let Some(attacker_e) = self.get_player(&attacker.entity_id) else {
+                error!("Could not find entity for attacker {attacker:?}");
+                return;
+            };
+
+            let Some(victim_e) = self.get_player(&victim_eid) else {
+                error!("No victim entity: {}", victim_eid);
+                return;
+            };
+
+            let my_name = self.weapon_name(damage_type, damage_bits, victim_e, attacker_e, None);
+
+            if *my_name != format!("{}", death.weapon_log_class_name) {
+                error!(
+                    "log names disagree log:{} vs us:{}",
+                    death.weapon_log_class_name, my_name
+                );
+            }
+
+            trace!(
+                "{}death with {} / {} damage_type:{damage_type:?} flags:{flags:?} bits:{damage_bits:?}   {death:?}",
+								if damage_bits.contains(Damage::Blast) { "blast " } else { "" },
+                death.weapon,
+                death.weapon_log_class_name,
+            );
+
+            let attacker = self
+                .player_summaries
+                .get_mut(&UserId::from(death.attacker as u32))
+                .unwrap();
+            attacker.handle_kill(self.round_state, my_name, flags, damage_type, airshot);
         }
 
         if death.assister == 0xffff {
@@ -1026,7 +1204,6 @@ impl<'a> MatchAnalyzer<'a> {
         }
 
         let assister = self
-            .state
             .player_summaries
             .get_mut(&UserId::from(death.assister as u32));
         if let Some(assister) = assister {
@@ -1045,7 +1222,7 @@ impl<'a> MatchAnalyzer<'a> {
                 continue;
             };
 
-            let Some(summary) = self.state.player_summaries.get_mut(uid) else {
+            let Some(summary) = self.player_summaries.get_mut(uid) else {
                 error!("Unknown uid {uid} from entity id {entity_id} in capture event");
                 continue;
             };
@@ -1063,7 +1240,7 @@ impl<'a> MatchAnalyzer<'a> {
             return;
         };
 
-        let Some(summary) = self.state.player_summaries.get_mut(uid) else {
+        let Some(summary) = self.player_summaries.get_mut(uid) else {
             error!("Unknown uid {uid} from entity id {entity_id} in capture blocked event");
             return;
         };
@@ -1079,40 +1256,225 @@ impl<'a> MatchAnalyzer<'a> {
             DamageType::Normal
         });
 
-        let uid = UserId::from(hurt.user_id);
-        let Some(victim) = self.state.player_summaries.get_mut(&uid) else {
-            error!("Unknown victim uid {uid} in player hurt event");
+        let effect = DamageEffect::try_from(hurt.bonus_effect).unwrap_or_else(|e| {
+            error!(
+                "Unknown hurt damage effect: {}, error: {e}",
+                hurt.bonus_effect
+            );
+            DamageEffect::Normal
+        });
+
+        // Note this doesn't map to actual schema weapons, and is wrong for any weapon
+        // with a projectile where the user may swaps weapons before the projectile hits.
+        //
+        // https://github.com/ValveSoftware/source-sdk-2013/blob/a62efecf624923d3bacc67b8ee4b7f8a9855abfd/src/game/server/tf/tf_player.cpp#L10779
+        let weapon_type = WeaponId::try_from(hurt.weapon_id).unwrap_or_else(|e| {
+            error!("Unknown hurt weapon id {}, error: {e}", hurt.weapon_id);
+            WeaponId::None
+        });
+
+        let fall_damage = hurt.attacker == 0
+            && !hurt.crit
+            && !hurt.mini_crit
+            && hurt.weapon_id == 0
+            && hurt.custom == 0
+            && hurt.bonus_effect == 0;
+        if hurt.attacker == hurt.user_id || fall_damage {
+            // No need to track self damage or fall damage for now
+            // TODO: maybe for rocket jumping or uber building?
+            return;
+        }
+
+        let attacker_uid = UserId::from(hurt.attacker);
+        let Some(attacker) = self.player_summaries.get(&attacker_uid) else {
+            error!("Unknown attacker uid {attacker_uid} in player hurt event");
+            return;
+        };
+        let attacker_eid = attacker.entity_id;
+        let attacker_entity = self.get_player(&attacker_eid);
+        let attacker_team = attacker_entity.map(|e| e.team).unwrap_or_default();
+        let attacker_handle = attacker_entity.and_then(|p| p.handle()).unwrap_or_else(|| {
+            error!("Player missing a handle??");
+            INVALID_HANDLE
+        });
+        let attacker_class = attacker.class;
+
+        let victim_uid = UserId::from(hurt.user_id);
+        let Some(victim) = self.player_summaries.get(&victim_uid) else {
+            error!("Unknown victim uid {victim_uid} in player hurt event");
+            return;
+        };
+        let origin = victim.origin;
+
+        let mut source = HurtSource::Unknown;
+
+        if attacker_class == Class::Engineer && damage_type == DamageType::Normal {
+            let remove_idx = if let Some((idx, s)) = self
+                .sentry_shots
+                .iter()
+                .enumerate()
+                .find(|s| s.1.sentry.owner_entity == attacker_eid)
+            {
+                source = HurtSource::SentryShot((*s).clone());
+                Some(idx)
+            } else {
+                None
+            };
+
+            if let Some(idx) = remove_idx {
+                self.sentry_shots.swap_remove(idx);
+            }
+        }
+
+        if matches!(source, HurtSource::Unknown) && damage_type != DamageType::Burning {
+            trace!(
+                "Check exps {attacker_handle} {} {:?}",
+                self.airblasts.contains(&attacker_handle),
+                self.explosions
+            );
+            let mut exps = self
+                .explosions
+                .iter()
+                .filter(|e| {
+                    e.projectile.owner == attacker_handle
+                        || e.projectile.original_owner == attacker_handle
+												// If the pyro reflects a projectile and it immediately hits a target in the
+												// same tick, it gets destroyed without ever changing owner.
+												|| self.airblasts.contains(&attacker_handle)
+                })
+                .map(|e| (e, EuclideanSpace::distance(&e.origin, &victim.origin)))
+                .collect::<Vec<_>>();
+            if !exps.is_empty() {
+                trace!("look at explosions {:?}", exps);
+                exps.sort_by(|a, b| a.1.total_cmp(&b.1));
+                let playerbox =
+                    Cuboid::new(Vector3::new(49.0, 49.0, 83.0)).aabb(&victim.origin.into());
+
+                let hit_exps = exps
+                    .into_iter()
+                    .filter(|(exp, _dist)| exp.projectile.check_hit(&playerbox))
+                    .collect::<Vec<_>>();
+
+                if let Some((e, _dist)) = hit_exps.first() {
+                    trace!("Hit by explosion! {:?} damage_type:{damage_type:?} effect:{effect:?}  weapon_type:{weapon_type:?}     {hit_exps:?}", format!("{:?}-{:?}-{:?}", e.projectile.class_name, e.projectile.grenade_type, e.projectile.model_id.as_ref().and_then(|id| self.models.get(id))));
+
+                    let mut e = (*hit_exps.first().unwrap().0).clone();
+                    if self.airblasts.contains(&attacker_handle) {
+                        e.projectile.is_reflected = true;
+                        e.projectile.owner = attacker_handle;
+                        e.projectile.team = attacker_team;
+                    }
+
+                    if entity::is_arrow(e.projectile.kind)
+                        || e.projectile.kind == entity::ProjectileType::ScorchShotFlare
+                        || e.projectile.kind == entity::ProjectileType::Cleaver
+                        || e.projectile.kind == entity::ProjectileType::EnergyRing
+                    {
+                        source = HurtSource::NonBlastProjectile(e);
+                    } else {
+                        source = HurtSource::Explosion(e);
+                    }
+                }
+            }
+        }
+
+        if hurt.attacker == 0 {
+            if self.round_state == RoundState::TeamWin && hurt.damage_amount == 5000 {
+                // Explosion at the end of some maps
+                return;
+            }
+
+            // Huge fall damage amounts >=500 are typically kill zones like falling out of a map.
+            if hurt.damage_amount <= 500
+                && (damage_type != DamageType::Normal
+                    || effect != DamageEffect::Crit
+                    || weapon_type != WeaponId::None)
+            {
+                error!(
+                    "Weird fall damage {} {damage_type:?} {effect:?} {weapon_type:?} {:?}",
+                    hurt.damage_amount, self.round_state
+                );
+            }
+
+            return;
+        }
+
+        let attacker_uid = UserId::from(hurt.attacker);
+        let Some(attacker) = self.player_summaries.get(&attacker_uid) else {
+            error!("Unknown attacker uid {attacker_uid} in player hurt event");
+            return;
+        };
+        let Some(attacker_e) = self.get_player(&attacker.entity_id) else {
+            error!("Unknown entity for attacker {attacker_uid}");
+            return;
+        };
+        let attacker_class = attacker_e.class;
+        let attacker_wep = attacker_e.last_active_weapon_handle;
+
+        let Some(victim_e) = self.get_player(&victim.entity_id) else {
+            error!("Unknown entity for victim {}", victim.entity_id);
             return;
         };
 
-        victim.handle_damage_taken(hurt, damage_type);
+        let hurt_event = Hurt {
+            victim: victim_uid,
+            attacker: attacker_uid,
+            wep: attacker_wep,
+            origin,
+            source,
+        };
+        let weapon_name = self.weapon_name(
+            damage_type,
+            Default::default(),
+            victim_e,
+            attacker_e,
+            Some(&hurt_event),
+        );
 
-        let uid = UserId::from(hurt.user_id);
-        let Some(attacker) = self.state.player_summaries.get_mut(&uid) else {
-            error!("Unknown attacker uid {uid} in player hurt event");
+        let Some(victim) = self.player_summaries.get_mut(&victim_uid) else {
+            error!("Unknown victim uid {victim_uid} in player hurt event");
             return;
         };
+        victim.handle_damage_taken(weapon_name, hurt, damage_type);
 
-        let h = attacker.active_weapon_handle;
-        if let Some(wep) = self.weapon_handles.get(&h) {
-            info!(
-                "hurt with {} vs entity: {} / {}",
-                hurt.weapon_id, wep.class, wep.id
+        if let Some(wep) = self.get_weapon(&attacker_wep) {
+            let Some(wi) = self.schema.items.get(&wep.schema_id) else {
+                error!("Weapon id {} not in schema", wep.schema_id);
+                return;
+            };
+            let amount = hurt.damage_amount;
+            debug!(
+                "{victim_uid} hurt by {attacker_uid} {attacker_class:?} as {amount} x {damage_type:?} ({effect:?}) with {weapon_type:?} vs entity: {} / {:?}   explosions:{:?}   {hurt:?}",
+                wep.class_name,
+                wi.item_type_name,
+                self.explosions
             );
         } else {
-            info!(
-                "hurt with {} but unknown player weapon handle: {h}",
+            error!(
+                "hurt with {} but unknown player weapon handle: {attacker_wep} {hurt:?}",
                 hurt.weapon_id
             );
         }
+        let Some(attacker) = self.player_summaries.get_mut(&attacker_uid) else {
+            error!("Unknown attacker uid {attacker_uid} in player hurt event");
+            return;
+        };
 
-        attacker.handle_damage_dealt(hurt, damage_type);
+        attacker.handle_damage_dealt(weapon_name, hurt, damage_type);
+
+        if hurt.health == 0 {
+            self.hurts.push(hurt_event);
+        }
     }
 
     pub fn handle_tick(&mut self, tick: &DemoTick, server_tick: Option<&NetTickMessage>) {
         if *tick != self.tick {
             self.on_tick();
         }
+
+        self.hurts.drain(..);
+        self.sentry_shots.drain(..);
+        self.airblasts.drain();
 
         self.tick = *tick;
 
@@ -1125,7 +1487,8 @@ impl<'a> MatchAnalyzer<'a> {
         self.span = None;
 
         self.span = Some(
-            debug_span!("Tick", tick = u32::from(*tick), server_tick = server_tick,).entered(),
+            tracing::error_span!("Tick", tick = u32::from(*tick), server_tick = server_tick,)
+                .entered(),
         );
     }
 
@@ -1133,43 +1496,53 @@ impl<'a> MatchAnalyzer<'a> {
     // processed. This is important when referring to entities that
     // may have been both created and referenced in the same packet.
     fn on_tick(&mut self) {
-        for (_, v) in &self.state.player_summaries {
-            if v.active_weapon_handle != 0 {
-                let Some(_) = self.weapon_handles.get(&v.active_weapon_handle) else {
-                    error!("could not find weapon handle {:?}", v.active_weapon_handle);
+        for v in self.player_summaries.values() {
+            let Some(e) = self.get_player(&v.entity_id) else {
+                continue;
+            };
+            if e.active_weapon_handle != 0 && e.active_weapon_handle != INVALID_HANDLE {
+                let Some(_) = self.get_weapon(&e.active_weapon_handle) else {
+                    error!("could not find weapon handle {:?}", e.active_weapon_handle);
                     continue;
                 };
             }
         }
 
-        for e in self.tick_events.drain(..) {
+        let t: Vec<_> = self.tick_events.drain(..).collect();
+        for e in t {
             match e {
+                Event::Death(death) => {
+                    self.handle_player_death(&death);
+                }
+                Event::Hurt(hurt) => {
+                    self.handle_player_hurt(&hurt);
+                }
                 Event::MedigunCharged(handle) => {
-                    if let Some(uid) = self.weapon_owners.get(&handle) {
-                        if let Some(player) = self.state.player_summaries.get_mut(uid) {
-                            if let Some(medigun) = self.weapon_handles.get(&handle) {
-                                if let Some(item) = self.schema.items.get(&medigun.id) {
-                                    player.handle_charged(medigun, item);
-                                } else {
-                                    error!(
-                                        "Med charged with an unknown medigun defindex: {}",
-                                        medigun.id
-                                    );
-                                }
-                            } else {
-                                error!("Med charged without a secondary {handle}");
-                            }
-                        } else {
-                            error!(
-                                "Invalid owner uid {uid} for medigun {handle} when it was charged"
-                            );
-                        }
-                    } else {
+                    let Some(uid) = self.weapon_owners.get(&handle) else {
                         error!("No owner for medigun {handle} when it was charged");
+                        continue;
                     };
+                    let Some(medigun) = self.get_weapon(&handle) else {
+                        error!("Med charged without a secondary {handle}");
+                        continue;
+                    };
+                    let Some(item) = self.schema.items.get(&medigun.schema_id) else {
+                        error!(
+                            "Med charged with an unknown medigun defindex: {}",
+                            medigun.schema_id
+                        );
+                        continue;
+                    };
+                    let Some(player) = self.player_summaries.get_mut(uid) else {
+                        error!("Invalid owner uid {uid} for medigun {handle} when it was charged");
+                        continue;
+                    };
+                    player.handle_charged(item);
                 }
             }
         }
+
+        self.explosions.clear();
     }
 }
 
@@ -1194,54 +1567,93 @@ impl MessageHandler for MatchAnalyzer<'_> {
         match message {
             Message::NetTick(t) => self.handle_tick(&tick, Some(t)),
             Message::PacketEntities(message) => {
+                self.mutated_colliders.drain(..);
+                self.removed_colliders.drain(..);
+
                 for entity in message.entities.iter() {
                     self.handle_packet_entity(entity, parser_state);
+                }
+                if !self.mutated_colliders.is_empty() || !self.removed_colliders.is_empty() {
+                    self.world.update_incremental(
+                        &self.collider_set,
+                        &self.mutated_colliders,
+                        &self.removed_colliders,
+                        true,
+                    );
                 }
             }
             Message::TempEntities(te) => {
                 for e in &te.events {
-                    match u16::from(e.class_id) {
-                        // 												165 => self.handle_temp_anim_entity(e),
-                        // 												152 => self.handle_temp_fire_bullets_entity(e),
-                        // 												177 => self.handle_temp_blood_entity(e),
-                        // 												149 => self.handle_temp_effect_data_entity(e),
-                        // 												179 => self.handle_temp_particle_effect_entity(e),
-                        129 => {} // metal sparks
-                        178 => {} // explosion
-                        147 => {} // Dust particle
-                        161 => {} // Metal sparks particle
-                        171 => {} // Smoke
-                        172 => {} // Spark particle
-                        146 => {} // decal
-                        166 => {} // player decal
-                        180 => {} // world decal
+                    let Some(class) = parser_state
+                        .server_classes
+                        .get(<ClassId as Into<usize>>::into(e.class_id))
+                    else {
+                        error!("Unknown temp entity class: {}", e.class_id);
+                        continue;
+                    };
 
-                        _ => {
-                            debug!("Unknown temp entity: {:?}", e);
+                    if class.name == "CTEPlayerAnimEvent" {
+                        let mut event: Option<u32> = None;
+                        let mut player: Option<u32> = None;
+                        for p in &e.props {
+                            match (p.identifier, &p.value) {
+                                (ANIM_ID, &SendPropValue::Integer(x)) => event = Some(x as u32),
+                                (ANIM_PLAYER, &SendPropValue::Integer(x)) => {
+                                    player = Some(x as u32);
+                                }
+                                _ => {}
+                            }
                         }
+                        if let (Some(event), Some(player)) = (event, player) {
+                            let Ok(event) = PlayerAnimation::try_from_primitive(event) else {
+                                error!("Invalid animation type in {e:?}");
+                                continue;
+                            };
+                            if event == PlayerAnimation::AttackSecondary {
+                                let Some(p) = self
+                                    .entity_handles
+                                    .get(&player)
+                                    .and_then(|eid| self.get_player(eid))
+                                else {
+                                    error!("Invalid player handle {player} in anim event");
+                                    continue;
+                                };
+                                if p.class == Class::Pyro
+                                    && p.active_weapon_handle == p.weapon_handles[0]
+                                {
+                                    self.airblasts.insert(player);
+                                }
+                            }
+                        }
+                    } else if class.name == "CTEEffectDispatch" {
+                        for p in &e.props {
+                            if let (EFFECT_ENTITY, &SendPropValue::Integer(x)) =
+                                (p.identifier, &p.value)
+                            {
+                                let e = self.entities.get(x as usize).and_then(|e| e.as_ref());
+                                trace!("effect dispatch to ent {x} {e:?}");
+
+                                if let Some(sentry) = e.and_then(|e| e.sentry()) {
+                                    self.sentry_shots.push(SentryShot {
+                                        sentry: sentry.clone(),
+                                    });
+                                }
+                            }
+                        }
+                    } else {
+                        debug!("Unknown temp entity {}: {:?}", class.name, e);
                     }
                 }
             }
             Message::GameEvent(GameEventMessage { event, .. }) => match event {
-                GameEvent::PlayerShoot(_) => {
-                    debug!("PlayerShoot");
+                GameEvent::PlayerDeath(death) => {
+                    self.tick_events.push(Event::Death(death.clone()));
                 }
-                GameEvent::PlayerDeath(death) => self.handle_player_death(death),
-                GameEvent::PlayerHurt(hurt) => self.handle_player_hurt(hurt),
+                GameEvent::PlayerHurt(hurt) => {
+                    self.tick_events.push(Event::Hurt(hurt.clone()));
+                }
                 GameEvent::TeamPlayPointCaptured(cap) => self.handle_point_captured(cap),
                 GameEvent::TeamPlayCaptureBlocked(block) => self.handle_capture_blocked(block),
-                GameEvent::RoundStart(_) => {
-                    debug!("round start");
-                    // self.state.buildings.clear();
-                }
-                GameEvent::TeamPlayRoundStart(_e) => {
-                    debug!("TeamPlayRoundStart");
-                    //self.state.buildings.clear();
-                }
-                GameEvent::ObjectDestroyed(ObjectDestroyedEvent { index: _, .. }) => {
-                    debug!("ObjectDestroyed");
-                    //self.state.remove_building((*index as u32).into());
-                }
 
                 // Some STVs demos don't have these events; they are
                 // present in PoV demos and some STV demos (possibly
@@ -1253,10 +1665,6 @@ impl MessageHandler for MatchAnalyzer<'_> {
 
                 _ => {
                     trace!("Unhandled game event: {event:?}");
-                    let event_string = format!("{:?}", event);
-                    if event_string.contains("Shoot") {
-                        trace!("Player shoot event");
-                    }
                 }
             },
             _ => {
@@ -1278,20 +1686,99 @@ impl MessageHandler for MatchAnalyzer<'_> {
                 entry.text.as_ref().map(|s| s.as_ref()),
                 entry.extra_data.as_ref().map(|data| data.data.clone()),
             );
-        } else {
-            trace!("Unhandled string entry: {index} {entry:?}");
+        }
+        if table == "modelprecache" {
+            self.models.insert(
+                index as u32,
+                entry
+                    .text
+                    .as_ref()
+                    .map(|s| s.to_string())
+                    .unwrap_or("".to_string()),
+            );
         }
     }
 
     fn handle_data_tables(
         &mut self,
-        _parse_tables: &[ParseSendTable],
-        _server_classes: &[ServerClass],
+        parse_tables: &[ParseSendTable],
+        server_classes: &[ServerClass],
         _parser_state: &ParserState,
     ) {
+        fn dfs<'a>(
+            graph: &'a HashMap<&'a str, Vec<&'a str>>,
+            start_node: &'a str,
+        ) -> HashSet<&'a str> {
+            let mut visited = HashSet::new();
+            let mut stack = Vec::new();
+
+            stack.push(start_node);
+
+            while let Some(node) = stack.pop() {
+                if !visited.contains(node) {
+                    visited.insert(node);
+
+                    if let Some(neighbors) = graph.get(node) {
+                        stack.extend(neighbors);
+                    }
+                }
+            }
+
+            visited
+        }
+
+        let mut classes = HashMap::<&str, ClassId>::new();
+        for table in server_classes {
+            classes.insert(table.data_table.as_str(), table.id);
+        }
+
+        let mut edges = HashMap::<&str, Vec<&str>>::new();
+        for table in parse_tables {
+            let name = table.name.as_str();
+            if let Some(baseclass) = table.props.iter().find(|p| p.name == "baseclass") {
+                if let Some(basename) = &baseclass.table_name {
+                    edges.entry(basename).or_default().push(name);
+                }
+            }
+        }
+
+        for weapon_name in dfs(&edges, "DT_BaseCombatWeapon") {
+            if let Some(id) = classes.get(weapon_name) {
+                self.weapon_class_ids.insert(*id);
+            } else {
+                error!("No class id for weapon {weapon_name}");
+            }
+        }
+
+        for projectile_name in dfs(&edges, "DT_BaseProjectile") {
+            if let Some(id) = classes.get(projectile_name) {
+                self.projectile_class_ids.insert(*id);
+            } else {
+                error!("No class id for projectile {projectile_name}");
+            }
+        }
     }
 
     fn into_output(self, _parser_state: &ParserState) -> <Self as MessageHandler>::Output {
-        self.state
+        let mut out = DemoSummary {
+            players: self.player_summaries.into_values().collect(),
+        };
+
+        // Deterministic output
+        out.players.sort_by_cached_key(|p| p.steamid.clone());
+
+        for summary in out.players.iter_mut() {
+            if summary.tick_start.is_none() {
+                // Player never fully connected
+                // TODO: Should we just exclude them from the output?
+                summary.tick_start = Some(self.tick);
+            }
+
+            if summary.tick_end.is_none() {
+                summary.tick_end = Some(self.tick);
+            }
+        }
+
+        out
     }
 }
