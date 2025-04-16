@@ -5,7 +5,12 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 #[actix_web::main]
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
-        .with(fmt::layer().without_time().with_target(false))
+        .with(
+            fmt::layer()
+                .without_time()
+                .with_target(false)
+                .with_writer(std::io::stderr),
+        )
         .with(EnvFilter::from_default_env())
         .init();
 

@@ -1,4 +1,7 @@
+mod entity;
 mod game;
+mod props;
+mod stats;
 pub mod summarizer;
 mod weapon;
 
@@ -30,4 +33,13 @@ pub fn parse(buffer: &[u8], schema: &Schema) -> tf_demo_parser::Result<DemoOutpu
         summary,
         filename: None,
     })
+}
+
+// Helpers for serde serialization
+pub fn is_zero(num: &u32) -> bool {
+    *num == 0
+}
+
+pub fn is_false(b: &bool) -> bool {
+    !(*b)
 }
