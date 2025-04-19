@@ -8,7 +8,7 @@ use crate::{
         is_false, is_zero,
         props::*,
         stats::Stats,
-        weapon::{self, projectile_log_name, sentry_name, strip_prefix, taunt_log_name},
+        weapon::{self, projectile_log_name, sentry_name, taunt_log_name},
     },
     schema::{Attribute, Item, Schema},
     Vec3,
@@ -171,6 +171,25 @@ impl MatchAnalyzerView<'_> {
             .get(usize::from(*id))
             .and_then(|b| b.as_ref())
             .and_then(|b| b.player())
+    }
+
+    pub fn handle_projectile_fired(&mut self, owner: &u32, item: &Item) {
+        let Some(eid) = self.entity_handles.get(owner) else {
+            error!("Could not find player entity for handle that fired projectile {owner:?}");
+            return;
+        };
+        let Some(pe) = self.get_player(&eid) else {
+            error!("Could not find player entity that fired projectile {owner:?}");
+            return;
+        };
+        let class = pe.class;
+        let uid = pe.user_id;
+        let Some(p) = self.player_summaries.get_mut(&uid) else {
+            error!("Could not find player sumamry that fired projectile {uid}");
+            return;
+        };
+
+        p.handle_fire_shot(weapon::weapon_name(item, class));
     }
 }
 
@@ -358,6 +377,18 @@ impl PlayerSummary {
         self.weapons.entry(weapon.into()).or_default()
     }
 
+    fn handle_fire_shot(&mut self, weapon: &str) {
+        self.stats.handle_fire_shot();
+        self.class_stats().handle_fire_shot();
+        self.weapon_stats(weapon).handle_fire_shot();
+    }
+
+    fn handle_shot_hit(&mut self, weapon: &str) {
+        self.stats.handle_shot_hit();
+        self.class_stats().handle_shot_hit();
+        self.weapon_stats(weapon).handle_shot_hit();
+    }
+
     fn handle_damage_dealt(
         &mut self,
         weapon: &str,
@@ -513,7 +544,7 @@ impl<'a> MatchAnalyzer<'a> {
             let entity_id = user_info.entity_id;
             let id = user_info.player_info.user_id;
             trace!(
-                "user info {} {id} {entity_id} {user_info:?}",
+                "user info {} user_id:{id} entity_id:{entity_id} {user_info:?}",
                 user_info.player_info.name,
             );
 
@@ -543,7 +574,7 @@ impl<'a> MatchAnalyzer<'a> {
     // Calculate weapon name in a player damage situation
     //
     // Note that damage_bits will only be provided for deaths.
-    pub fn weapon_name(
+    pub fn weapon_name_from_damage(
         &self,
         damage_type: DamageType,
         damage_bits: EnumSet<Damage>,
@@ -562,18 +593,8 @@ impl<'a> MatchAnalyzer<'a> {
 
         let h = attacker.last_active_weapon_handle;
         if let Some(weapon) = self.get_weapon(&h) {
-            if let Some(v) = self.schema.items.get(&weapon.schema_id) {
-                my_name = v
-                    .item_logname
-                    .as_ref()
-                    .map(|s| ustr::ustr(s).as_str())
-                    .or(v
-                        .item_class
-                        .as_deref()
-                        .map(strip_prefix)
-                        .map(|s| ustr::ustr(s).as_str()))
-                    .map(|s| weapon::log_name(s, attacker.class))
-                    .unwrap_or("UNKNOWN");
+            if let Some(item) = self.schema.items.get(&weapon.schema_id) {
+                my_name = weapon::weapon_name(item, attacker.class);
             } else {
                 error!("Weapon id not in schema! {}", weapon.schema_id);
             }
@@ -1230,7 +1251,8 @@ impl<'a> MatchAnalyzer<'a> {
                 return;
             };
 
-            let my_name = self.weapon_name(damage_type, damage_bits, victim_e, attacker_e, None);
+            let my_name =
+                self.weapon_name_from_damage(damage_type, damage_bits, victim_e, attacker_e, None);
 
             if *my_name != format!("{}", death.weapon_log_class_name) {
                 error!(
@@ -1478,7 +1500,7 @@ impl<'a> MatchAnalyzer<'a> {
             origin,
             source,
         };
-        let weapon_name = self.weapon_name(
+        let weapon_name = self.weapon_name_from_damage(
             damage_type,
             Default::default(),
             victim_e,
@@ -1516,6 +1538,14 @@ impl<'a> MatchAnalyzer<'a> {
         };
 
         attacker.handle_damage_dealt(weapon_name, hurt, damage_type);
+
+        // TODO: Handle initial flamethrower hits; ignore
+        if damage_type != DamageType::Burning
+            && damage_type != DamageType::Burning
+            && !weapon::is_sentry(weapon_name)
+        {
+            attacker.handle_shot_hit(weapon_name);
+        }
 
         if hurt.health == 0 {
             self.hurts.push(hurt_event);
@@ -1708,6 +1738,8 @@ impl MessageHandler for MatchAnalyzer<'_> {
                                 {
                                     self.airblasts.insert(player);
                                 }
+                            } else {
+                                trace!("Unhandled animation type {event:?}: {te:?}");
                             }
                         }
                     } else if class.name == "CTEEffectDispatch" {
@@ -1725,6 +1757,48 @@ impl MessageHandler for MatchAnalyzer<'_> {
                                 }
                             }
                         }
+                    } else if class.name == "CTEFireBullets" {
+                        let mut player = None;
+                        for p in &e.props {
+                            if let (FIRE_BULLETS_PLAYER, &SendPropValue::Integer(x)) =
+                                (p.identifier, &p.value)
+                            {
+                                // Player ids here are offset by 1
+                                // https://github.com/ValveSoftware/source-sdk-2013/blob/0565403b153dfcde602f6f58d8f4d13483696a13/src/game/server/tf/tf_fx.cpp#L80
+                                player = Some(EntityId::from((x + 1) as u32));
+                            }
+                        }
+                        let Some(pe) = player.and_then(|id| self.get_player(&id)) else {
+                            error!(
+                                "Could not find player entity for firebullets player {player:?}"
+                            );
+                            continue;
+                        };
+
+                        let Some(weapon) = self.get_weapon(&pe.last_active_weapon_handle) else {
+                            error!(
+                                "Could not find active weapon ({}) for player that fired bullets {player:?}",
+																pe.last_active_weapon_handle
+                            );
+                            continue;
+                        };
+                        let Some(item) = self.schema.items.get(&weapon.schema_id) else {
+                            error!(
+                                "Could not find item schema for weapon ({}) for fired bullets {player:?}",
+																weapon.schema_id
+                            );
+                            continue;
+                        };
+
+                        let name = weapon::weapon_name(item, pe.class);
+
+                        let uid = pe.user_id;
+                        let Some(p) = self.player_summaries.get_mut(&uid) else {
+                            error!("Could not find player for firebullets {player:?}");
+                            continue;
+                        };
+
+                        p.handle_fire_shot(name);
                     } else {
                         debug!("Unknown temp entity {}: {:?}", class.name, e);
                     }
