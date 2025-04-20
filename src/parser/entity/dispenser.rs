@@ -18,23 +18,22 @@ use tf_demo_parser::{
 };
 use tracing::error;
 
-#[optfield::optfield(SentryPatch, merge_fn, attrs)]
+#[optfield::optfield(DispenserPatch, merge_fn, attrs)]
 #[derive(Clone, Debug, PartialEq, Default)]
-pub struct Sentry {
+pub struct Dispenser {
     pub origin: Vec3,
     pub owner: u32, // handle id
     pub owner_entity: EntityId,
     pub level: u32,
-    pub is_mini: bool,
 }
 
-impl Sentry {
+impl Dispenser {
     fn parse(
         packet: &PacketEntity,
         parser_state: &ParserState,
         game: &mut MatchAnalyzerView,
-    ) -> SentryPatch {
-        let mut patch = SentryPatch::default();
+    ) -> DispenserPatch {
+        let mut patch = DispenserPatch::default();
 
         for prop in packet.props(parser_state) {
             match (prop.identifier, &prop.value) {
@@ -47,9 +46,6 @@ impl Sentry {
                     }
                 }
                 (UPGRADE_LEVEL, &SendPropValue::Integer(l)) => patch.level = Some(l as u32),
-                (OBJECT_MAX_HEALTH, &SendPropValue::Integer(l)) => {
-                    patch.is_mini = Some(l == 100);
-                }
                 _ => {}
             }
         }
@@ -57,13 +53,13 @@ impl Sentry {
     }
 }
 
-impl Entity for Sentry {
+impl Entity for Dispenser {
     fn new(
         packet: &PacketEntity,
         parser_state: &ParserState,
         game: &mut MatchAnalyzerView,
     ) -> Self {
-        let patch = Sentry::parse(packet, parser_state, game);
+        let patch = Dispenser::parse(packet, parser_state, game);
 
         if let Some(owner) = patch.owner {
             game.handle_object_built(&owner);
@@ -71,24 +67,20 @@ impl Entity for Sentry {
 
         Self {
             origin: patch.origin.unwrap_or_else(|| {
-                error!("No origin for Sentry gun! {packet:?}");
+                error!("No origin for Dispenser gun! {packet:?}");
                 Vec3::default()
             }),
             owner: patch.owner.unwrap_or_else(|| {
-                error!("No owner for Sentry gun! {packet:?}");
+                error!("No owner for Dispenser gun! {packet:?}");
                 0
             }),
             owner_entity: patch.owner_entity.unwrap_or_else(|| {
-                error!("No owner entity for Sentry gun! {packet:?}");
+                error!("No owner entity for Dispenser gun! {packet:?}");
                 EntityId::default()
             }),
             level: patch.level.unwrap_or_else(|| {
-                error!("No level for Sentry gun! {packet:?}");
+                error!("No level for Dispenser gun! {packet:?}");
                 0
-            }),
-            is_mini: patch.is_mini.unwrap_or_else(|| {
-                error!("No is_mini based on max hp for Sentry gun! {packet:?}");
-                false
             }),
         }
     }
@@ -99,11 +91,11 @@ impl Entity for Sentry {
         parser_state: &ParserState,
         game: &mut MatchAnalyzerView,
     ) -> Box<dyn Any> {
-        Box::new(Sentry::parse(packet, parser_state, game))
+        Box::new(Dispenser::parse(packet, parser_state, game))
     }
 
     fn apply_preserve(&mut self, patch: Box<dyn Any>) {
-        let patch = patch.downcast::<SentryPatch>().unwrap();
+        let patch = patch.downcast::<DispenserPatch>().unwrap();
         self.merge_opt(*patch);
     }
 
@@ -119,9 +111,6 @@ impl Entity for Sentry {
     }
 
     fn class(&self) -> EntityClass {
-        EntityClass::Sentry
-    }
-    fn sentry(&self) -> Option<&Sentry> {
-        Some(self)
+        EntityClass::Dispenser
     }
 }

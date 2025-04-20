@@ -402,7 +402,7 @@ impl Entity for Projectile {
 
         if !is_sentry && original_owner != 0 {
             if let Some(item) = item {
-                game.handle_projectile_fired(&original_owner, &item);
+                game.handle_projectile_fired(&original_owner, item);
             }
         }
 
