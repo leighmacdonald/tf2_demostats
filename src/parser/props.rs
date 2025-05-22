@@ -142,6 +142,14 @@ pub const ROUND_STATE: SendPropIdentifier =
 pub const EFFECT_ENTITY: SendPropIdentifier = SendPropIdentifier::new("DT_EffectData", "entindex");
 pub const EFFECT_NAME: SendPropIdentifier =
     SendPropIdentifier::new("DT_EffectData", "m_iEffectName");
+pub const EFFECT_DAMAGE_TYPE: SendPropIdentifier =
+    SendPropIdentifier::new("DT_EffectData", "m_nDamageType");
+pub const EFFECT_ORIGIN_X: SendPropIdentifier =
+    SendPropIdentifier::new("DT_EffectData", "m_vOrigin[0]");
+pub const EFFECT_ORIGIN_Y: SendPropIdentifier =
+    SendPropIdentifier::new("DT_EffectData", "m_vOrigin[1]");
+pub const EFFECT_ORIGIN_Z: SendPropIdentifier =
+    SendPropIdentifier::new("DT_EffectData", "m_vOrigin[2]");
 
 pub const ANIM_PLAYER: SendPropIdentifier =
     SendPropIdentifier::new("DT_TEPlayerAnimEvent", "m_hPlayer");
