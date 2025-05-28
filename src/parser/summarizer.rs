@@ -1,6 +1,6 @@
 use crate::{
     parser::{
-        entity::{self, Entity},
+        entity::{self, Entity, ProjectileType},
         game::{
             Damage, DamageEffect, DamageType, Death, PlayerAnimation, RoundState, WeaponId,
             INVALID_HANDLE,
@@ -134,9 +134,10 @@ pub struct MatchAnalyzer<'a> {
     // Events that happened this tick
     hurts: Vec<Hurt>,
     sentry_shots: Vec<SentryShot>,
-    explosions: Vec<Explosion>,
-    airblasts: HashSet<u32>, // handles of players that airblasted this tick
+    explosions: Vec<Explosion>, // aka projectiles that were deleted this frame
     deleted_entities: HashSet<EntityId>,
+
+    airblasts: HashSet<u32>, // handles of players that airblasted this tick
 
     // Queryable geometry world. QVBH under the hood.
     world: QueryPipeline,
@@ -1326,6 +1327,12 @@ impl<'a> MatchAnalyzer<'a> {
             .and_then(|uid| self.player_summaries.get_mut(uid))
     }
 
+    pub fn get_player_summary_mut_handle(&mut self, handle: &u32) -> Option<&mut PlayerSummary> {
+        let h = self.entity_handles.get(handle).map(|x| *x).clone();
+
+        h.and_then(|x| self.get_player_summary_mut(&x))
+    }
+
     pub fn handle_point_captured(&mut self, cap: &TeamPlayPointCapturedEvent) {
         trace!("Point captured {:?}", cap);
 
@@ -1598,7 +1605,7 @@ impl<'a> MatchAnalyzer<'a> {
         self.span = None;
 
         self.span = Some(
-            tracing::error_span!("Tick", tick = u32::from(*tick), server_tick = server_tick,)
+            tracing::error_span!("Tick", tick = u32::from(*tick)) //, server_tick = server_tick,)
                 .entered(),
         );
     }
@@ -1770,18 +1777,51 @@ impl MessageHandler for MatchAnalyzer<'_> {
                         }
                     } else if class.name == "CTEEffectDispatch" {
                         let mut entity = None;
-                        let mut name = None;
+                        let mut name_id = None;
+                        let mut raw_dmg_type = 0;
+                        let mut origin = Vec3::default();
+                        let mut start = Vec3::default();
                         for p in &e.props {
                             match (p.identifier, &p.value) {
                                 (EFFECT_ENTITY, &SendPropValue::Integer(x)) => {
-                                    entity = Some(x as u32);
+                                    entity = Some((x as u32) + 1);
                                 }
                                 (EFFECT_NAME, &SendPropValue::Integer(x)) => {
-                                    name = Some(x as u32);
+                                    name_id = Some(x as u32);
+                                }
+                                (EFFECT_DAMAGE_TYPE, &SendPropValue::Integer(x)) => {
+                                    raw_dmg_type = x as u32;
+                                }
+                                (EFFECT_ORIGIN_X, &SendPropValue::Float(x)) => {
+                                    origin.x = x as f32;
+                                }
+                                (EFFECT_ORIGIN_Y, &SendPropValue::Float(y)) => {
+                                    origin.y = y as f32;
+                                }
+                                (EFFECT_ORIGIN_Z, &SendPropValue::Float(z)) => {
+                                    origin.z = z as f32;
+                                }
+                                (EFFECT_START_X, &SendPropValue::Float(x)) => {
+                                    start.x = x as f32;
+                                }
+                                (EFFECT_START_Y, &SendPropValue::Float(y)) => {
+                                    start.y = y as f32;
+                                }
+                                (EFFECT_START_Z, &SendPropValue::Float(z)) => {
+                                    start.z = z as f32;
                                 }
                                 _ => {}
                             }
                         }
+
+                        let _damage_bits = EnumSet::<Damage>::try_from_repr(raw_dmg_type)
+                            .unwrap_or_else(|| {
+                                error!("Unknown damage bits: {}", raw_dmg_type);
+                                EnumSet::<Damage>::new()
+                            });
+
+                        let name =
+                            name_id.map(|id| self.effects.get(&id).map(|e: &String| e.as_str()));
 
                         let (Some(entity), Some(name)) = (entity, name) else {
                             trace!("Effect does not have both name:{name:?} and an entity:{entity:?} from {e:?}");
@@ -1796,18 +1836,41 @@ impl MessageHandler for MatchAnalyzer<'_> {
                             }
                             return;
                         };
-                        let Some(name) = self.effects.get(&name).map(|e: &String| e.as_str())
-                        else {
-                            error!("Unknown effect name: {name}");
+                        let Some(name) = name else {
+                            error!("Unknown effect name for id {name_id:?}");
                             return;
                         };
 
-                        trace!("effect dispatch to ent {name} {e:?} {ent:?}");
+                        trace!("effect dispatch to ent {name:?} {e:?} {ent:?}");
 
                         if let Some(sentry) = ent.sentry() {
                             self.sentry_shots.push(SentryShot {
                                 sentry: sentry.clone(),
                             });
+                        }
+
+                        if name == "Impact" {
+                            let explosions = self
+                                .explosions
+                                .iter()
+                                .map(|e| (e, EuclideanSpace::distance(&e.origin, &origin)))
+                                .collect::<Vec<_>>();
+
+                            if let Some((explosion, _)) =
+                                explosions.iter().max_by(|x, y| x.1.total_cmp(&y.1))
+                            {
+                                if explosion.projectile.kind == ProjectileType::HealingBolt
+                                    && !explosion.projectile.is_reflected
+                                {
+                                    let o = explosion.projectile.owner;
+                                    let Some(attacker) = self.get_player_summary_mut_handle(&o)
+                                    else {
+                                        error!("Could not find player that fired healing bolt");
+                                        continue;
+                                    };
+                                    attacker.handle_shot_hit("crusaders_crossbow");
+                                }
+                            }
                         }
                     } else if class.name == "CTEFireBullets" {
                         let mut player = None;

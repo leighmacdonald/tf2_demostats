@@ -150,6 +150,12 @@ pub const EFFECT_ORIGIN_Y: SendPropIdentifier =
     SendPropIdentifier::new("DT_EffectData", "m_vOrigin[1]");
 pub const EFFECT_ORIGIN_Z: SendPropIdentifier =
     SendPropIdentifier::new("DT_EffectData", "m_vOrigin[2]");
+pub const EFFECT_START_X: SendPropIdentifier =
+    SendPropIdentifier::new("DT_EffectData", "m_vStart[0]");
+pub const EFFECT_START_Y: SendPropIdentifier =
+    SendPropIdentifier::new("DT_EffectData", "m_vStart[1]");
+pub const EFFECT_START_Z: SendPropIdentifier =
+    SendPropIdentifier::new("DT_EffectData", "m_vStart[2]");
 
 pub const ANIM_PLAYER: SendPropIdentifier =
     SendPropIdentifier::new("DT_TEPlayerAnimEvent", "m_hPlayer");
