@@ -56,7 +56,6 @@ use tracing::{debug, error, span::EnteredSpan, trace, warn};
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct DemoSummary {
-    pub players: Vec<PlayerSummary>,
     pub rounds: Vec<RoundSummary>,
     pub chat: Vec<ChatMessage>,
 }
@@ -268,7 +267,8 @@ pub struct RoundSummary {
 
     pub time: f32, // in seconds
 
-    pub mvps: Vec<String>, // steamids
+    pub mvps: Vec<String>,           // steamids
+    pub players: Vec<PlayerSummary>, // steamids
 
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub winners: Vec<String>, // steamids
@@ -1841,7 +1841,23 @@ impl MessageHandler for MatchAnalyzer<'_> {
                         self.current_round.losers = losers;
                     }
 
+                    // Populate players for the round that just ended
+                    for player_summary in self.player_summaries.values() {
+                        // Optionally filter for players active in this round if needed,
+                        // for now, we take a snapshot of all known players.
+                        // Players who left mid-round will have their stats up to that point.
+                        self.current_round.players.push(player_summary.clone());
+                    }
+                    self.current_round
+                        .players
+                        .sort_by_cached_key(|p| p.steamid.clone());
+
                     self.rounds.push(std::mem::take(&mut self.current_round));
+
+                    // Reset stats for all players for the new round
+                    for player_summary in self.player_summaries.values_mut() {
+                        player_summary.reset_stats();
+                    }
                 }
 
                 // Some STVs demos don't have these events; they are
@@ -2009,29 +2025,44 @@ impl MessageHandler for MatchAnalyzer<'_> {
         }
     }
 
-    fn into_output(self, _parser_state: &ParserState) -> <Self as MessageHandler>::Output {
-        let mut out = DemoSummary {
-            players: self.player_summaries.into_values().collect(),
-            rounds: self.rounds,
-            chat: self.chat,
-        };
+    fn into_output(mut self, _parser_state: &ParserState) -> <Self as MessageHandler>::Output {
+        // If the demo ends mid-round, capture the state of the current_round
+        // We can check if current_round has any meaningful data, e.g., time > 0 or specific events occurred.
+        // A simple check could be if any players have stats, or if round_state indicates it started.
+        // For now, we'll assume if self.current_round.time > 0 or if it's not default, it's a partial round.
+        // A more robust check might be needed depending on how RoundSummary is populated.
+        // Let's assume if there are any players, or if round time is set, it's a round.
+        if self.current_round.time > 0.0
+            || !self.player_summaries.is_empty() && self.rounds.is_empty()
+            || (self.round_state != RoundState::default()
+                && self.round_state != RoundState::Pregame)
+        {
+            for player_summary in self.player_summaries.values() {
+                self.current_round.players.push(player_summary.clone());
+            }
+            self.current_round
+                .players
+                .sort_by_cached_key(|p| p.steamid.clone());
+            self.rounds.push(std::mem::take(&mut self.current_round));
+        }
 
-        // Deterministic output
-        out.players.sort_by_cached_key(|p| p.steamid.clone());
-
-        for summary in out.players.iter_mut() {
+        // Update tick_end for all players in self.player_summaries who are still "connected"
+        // This ensures their global connection span is correctly recorded.
+        // The PlayerSummary objects within each round are snapshots and won't be affected here.
+        for summary in self.player_summaries.values_mut() {
             if summary.tick_start.is_none() {
-                // Player never fully connected
-                // TODO: Should we just exclude them from the output?
+                // Player might have info but never fully entered an entity processing loop
                 summary.tick_start = Some(self.tick);
             }
-
             if summary.tick_end.is_none() {
                 summary.tick_end = Some(self.tick);
             }
         }
 
-        out
+        DemoSummary {
+            rounds: self.rounds,
+            chat: self.chat,
+        }
     }
 }
 
@@ -2132,16 +2163,17 @@ mod tests {
 
         let summary = analyzer.into_output(&parser_state);
 
-        assert_eq!(summary.players.len(), 1);
-        assert_eq!(summary.players[0].name, "Player1");
-        assert_eq!(summary.players[0].steamid, EXAMPLE_STEAMID);
-        assert_eq!(summary.players[0].connection_count, 1);
+        assert_eq!(summary.rounds.len(), 1);
+        assert_eq!(summary.rounds[0].players.len(), 1);
+        assert_eq!(summary.rounds[0].players[0].name, "Player1");
+        assert_eq!(summary.rounds[0].players[0].steamid, EXAMPLE_STEAMID);
+        assert_eq!(summary.rounds[0].players[0].connection_count, 1);
 
-        assert_eq!(summary.players[0].user_id, 2);
+        assert_eq!(summary.rounds[0].players[0].user_id, 2);
 
         // tf_demo_parser internally increments the entity id by one to account for TF2's encoding
         assert_eq!(
-            summary.players[0].entity_id,
+            summary.rounds[0].players[0].entity_id,
             EntityId::from(example_entity_id + 1)
         );
     }
@@ -2175,12 +2207,13 @@ mod tests {
 
         let summary = analyzer.into_output(&parser_state);
 
-        assert_eq!(summary.players.len(), 1);
-        assert_eq!(summary.players[0].name, "PlayerA_NewName");
-        assert_eq!(summary.players[0].steamid, EXAMPLE_STEAMID);
-        assert_eq!(summary.players[0].connection_count, 2);
+        assert_eq!(summary.rounds.len(), 1);
+        assert_eq!(summary.rounds[0].players.len(), 1);
+        assert_eq!(summary.rounds[0].players[0].name, "PlayerA_NewName");
+        assert_eq!(summary.rounds[0].players[0].steamid, EXAMPLE_STEAMID);
+        assert_eq!(summary.rounds[0].players[0].connection_count, 2);
 
-        assert_eq!(summary.players[0].user_id, 4);
-        assert_eq!(summary.players[0].entity_id, EntityId::from(57u32));
+        assert_eq!(summary.rounds[0].players[0].user_id, 4);
+        assert_eq!(summary.rounds[0].players[0].entity_id, EntityId::from(57u32));
     }
 }
