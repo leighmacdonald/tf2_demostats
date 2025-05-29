@@ -406,6 +406,10 @@ impl Entity for Player {
         EntityClass::Player
     }
 
+    fn origin(&self) -> Option<Vec3> {
+        Some(self.origin)
+    }
+
     fn player(&self) -> Option<&Player> {
         Some(self)
     }
