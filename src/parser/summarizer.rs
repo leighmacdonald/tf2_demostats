@@ -1723,20 +1723,30 @@ impl MessageHandler for MatchAnalyzer<'_> {
                             // ignore players that have left
                             .filter(|p| p.tick_end.is_none())
                         {
-                            if p.team == winner {
+                            let Some(pe) = self.get_player(&p.entity_id) else {
+                                error!("Missing player at round end {:?}", p.entity_id);
+                                continue;
+                            };
+                            if pe.team == winner {
                                 self.current_round.winners.push(p.steamid.clone());
-                            } else if p.team == loser {
+                            } else if pe.team == loser {
                                 self.current_round.losers.push(p.steamid.clone());
                             } // else: spec, or never joined a team
                         }
                     } else if winner == Team::Other {
                         self.current_round.is_stalemate = true;
 
-                        for p in self.player_summaries.values().filter(|p| {
-                            p.tick_end.is_none() && (p.team == Team::Red || p.team == Team::Blue)
-                        }) {
-                            self.current_round.losers.push(p.steamid.clone());
+                        let mut losers = vec![];
+                        for (p, _pe) in self
+                            .player_summaries
+                            .values()
+                            .filter(|p| p.tick_end.is_none())
+                            .filter_map(|p| self.get_player(&p.entity_id).map(|pe| (p, pe)))
+                            .filter(|(_p, pe)| pe.team == Team::Red || pe.team == Team::Blue)
+                        {
+                            losers.push(p.steamid.clone());
                         }
+                        self.current_round.losers = losers;
                     }
 
                     self.rounds.push(std::mem::take(&mut self.current_round));
