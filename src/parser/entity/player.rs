@@ -279,26 +279,30 @@ impl Entity for Player {
         if let Some(&user_id) = game.user_entities.get(&packet.entity_index) {
             s.user_id = user_id;
 
-            if let Some(summary) = game.player_summaries.get_mut(&user_id) {
-                summary.class = patch.class.unwrap_or(summary.class);
-                summary.health = patch.health.unwrap_or(summary.health);
+            if let Some(steamid) = game.user_id_to_steam_id.get(&user_id).cloned() {
+                if let Some(summary) = game.player_summaries.get_mut(&steamid) {
+                    summary.class = patch.class.unwrap_or(summary.class);
+                    summary.health = patch.health.unwrap_or(summary.health);
 
-                for &w in patch.weapon_handles.iter() {
-                    if let Some(w) = w {
-                        game.weapon_owners.insert(w, user_id);
+                    for &w in patch.weapon_handles.iter() {
+                        if let Some(w) = w {
+                            game.weapon_owners.insert(w, user_id);
+                        }
                     }
-                }
 
-                for &c in patch.cosmetics.iter() {
-                    if let Some(c) = c {
-                        game.cosmetic_owners.insert(c, user_id);
+                    for &c in patch.cosmetics.iter() {
+                        if let Some(c) = c {
+                            game.cosmetic_owners.insert(c, user_id);
+                        }
                     }
+                } else {
+                    error!("No summary for new player steamid: {} (user_id: {})", steamid, s.user_id);
                 }
             } else {
-                error!("No summary for new player user id: {}", s.user_id);
+                error!("No steamid mapping for new player user_id: {}", s.user_id);
             }
         } else {
-            error!("No user id ready for new user! {packet:?}")
+            error!("No user_id ready for new user! {packet:?}")
         }
 
         s.apply_patch(&patch);
@@ -319,8 +323,13 @@ impl Entity for Player {
         let mut patch = Box::new(PlayerPatch::default());
         Player::parse(packet, parser_state, &mut patch);
 
-        let Some(summary) = game.player_summaries.get_mut(&user_id) else {
-            error!("Unknown player user id: {}", user_id);
+        let Some(steamid) = game.user_id_to_steam_id.get(&user_id).cloned() else {
+            error!("Unknown steamid mapping for player user id: {}", user_id);
+            return patch;
+        };
+
+        let Some(summary) = game.player_summaries.get_mut(&steamid) else {
+            error!("Unknown player summary for steamid: {} (user_id: {})", steamid, user_id);
             return patch;
         };
 
@@ -387,15 +396,22 @@ impl Entity for Player {
 
     fn delete(self: Box<Self>, game: &mut MatchAnalyzerView) {
         let user_id = self.user_id;
-        let Some(summary) = game.player_summaries.get_mut(&user_id) else {
-            error!("Unknown player user id: {}", user_id);
-            return;
-        };
-        trace!("Player left {self:?}");
-        if summary.tick_end.is_some() {
-            error!("Player left twice?");
+        if let Some(steamid) = game.user_id_to_steam_id.get(&user_id).cloned() {
+            if let Some(summary) = game.player_summaries.get_mut(&steamid) {
+                trace!("Player left {self:?}");
+                if summary.tick_end.is_some() {
+                    // This can happen if a player disconnects and their entity is deleted later.
+                    // We only care about the first time they are marked as "left".
+                    // However, with steamid-based summaries, tick_end should reflect the very last tick.
+                    // For now, let's assume the last entity deletion marks the final tick_end.
+                }
+                summary.tick_end = Some(game.tick);
+            } else {
+                error!("Unknown player summary for steamid: {} (user_id: {}) during delete", steamid, user_id);
+            }
+        } else {
+            error!("Unknown steamid mapping for player user_id: {} during delete", user_id);
         }
-        summary.tick_end = Some(game.tick);
     }
 
     fn handle(&self) -> Option<u32> {
