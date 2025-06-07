@@ -143,7 +143,8 @@ impl Projectile {
                         let handle = game
                             .weapon_owners
                             .get(&launcher)
-                            .and_then(|uid| game.player_summaries.get(uid))
+                            .and_then(|uid| game.user_id_to_steam_id.get(uid))
+                            .and_then(|sid| game.player_summaries.get(sid))
                             .and_then(|p| game.get_player(&p.entity_id))
                             .and_then(|p| p.handle());
 
@@ -283,7 +284,8 @@ impl Entity for Projectile {
             .or(p
                 .original_launcher_handle
                 .and_then(|h| game.weapon_owners.get(&h))
-                .and_then(|uid| game.player_summaries.get(uid))
+                .and_then(|uid| game.user_id_to_steam_id.get(uid))
+                .and_then(|sid| game.player_summaries.get(sid))
                 .and_then(|p| game.get_player(&p.entity_id))
                 .and_then(|p| p.handle()))
             .unwrap_or_else(|| {
