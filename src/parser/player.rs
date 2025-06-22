@@ -16,6 +16,18 @@ use tf_demo_parser::demo::{
 };
 use tracing::error;
 
+/// For use with serde's [serialize_with] attribute
+fn ordered_map<S, K: Ord + Serialize, V: Serialize>(
+    value: &HashMap<K, V>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let ordered: std::collections::BTreeMap<_, _> = value.iter().collect();
+    ordered.serialize(serializer)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct PlayerSummary {
     pub name: String,
@@ -33,17 +45,13 @@ pub struct PlayerSummary {
     pub stats: Stats,
 
     pub classes: HashMap<Class, Stats>,
+    #[serde(serialize_with = "ordered_map")]
     pub weapons: HashMap<String, Stats>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scoreboard_kills: Option<u32>,
-    #[serde(skip_serializing_if = "is_zero")]
-    pub postround_kills: u32,
-
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scoreboard_assists: Option<u32>, // Only present in PoV demos
-    #[serde(skip_serializing_if = "is_zero")]
-    pub postround_assists: u32,
 
     #[serde(skip_serializing_if = "is_zero")]
     pub suicides: u32,
@@ -264,7 +272,7 @@ impl PlayerSummary {
         self.stats = Stats::default();
         self.classes.clear();
         self.weapons.clear();
-        // scoreboard_healing is temporary and reset implicitly or explicitly elsewhere.
+        // scoreboard_healing is temporary and reset elsewhere.
         // postround_kills, assists, deaths are reset by virtue of Stats::default()
         self.suicides = 0; // Reset suicides per round
         self.captures = 0;
@@ -272,6 +280,6 @@ impl PlayerSummary {
         // charge and kritzed are transient states, not long-term stats to be reset here.
         // points, bonus_points, scoreboard_kills, scoreboard_assists, scoreboard_deaths, scoreboard_damage
         // are generally cumulative or snapshot from game messages, not reset here unless explicitly required
-        // to be per-round from source. For now, assuming they reflect overall demo state or are updated by game.
+        // to be per-round from source.
     }
 }

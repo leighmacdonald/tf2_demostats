@@ -1052,7 +1052,7 @@ impl<'a> MatchAnalyzer<'a> {
 
         if self.round_state == RoundState::TeamWin {
             if let Some(attacker) = self.player_summaries.get_mut(&attacker_steamid) {
-                attacker.postround_kills += 1;
+                attacker.stats.postround_kills += 1;
             } else {
                 error!(
                     "Failed to get mutable attacker summary for steamid: {}",
@@ -2214,6 +2214,9 @@ mod tests {
         assert_eq!(summary.rounds[0].players[0].connection_count, 2);
 
         assert_eq!(summary.rounds[0].players[0].user_id, 4);
-        assert_eq!(summary.rounds[0].players[0].entity_id, EntityId::from(57u32));
+        assert_eq!(
+            summary.rounds[0].players[0].entity_id,
+            EntityId::from(57u32)
+        );
     }
 }
