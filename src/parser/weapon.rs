@@ -223,6 +223,7 @@ pub fn taunt_log_name(damage_type: DamageType) -> Option<&'static str> {
         DamageType::TauntArmageddon => Some("armageddon"),
         DamageType::TauntAllclassGuitarRiff => Some("taunt_guitar_riff_kill"),
         DamageType::TauntGasBlast => Some("gas_blast"),
+        DamageType::TauntTrickShot => Some("taunt_trickshot"),
         _ => None,
     }
 }

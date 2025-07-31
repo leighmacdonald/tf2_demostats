@@ -126,6 +126,7 @@ pub enum DamageType {
     AxtinguisherBoosted = 83,
     KrampusMelee = 84,
     KrampusRanged = 85,
+    TauntTrickShot = 86,
 }
 
 #[derive(
