@@ -6,7 +6,7 @@ use enumset::EnumSet;
 use serde::{Deserialize, Serialize};
 use tf_demo_parser::demo::gameevent_gen::PlayerHurtEvent;
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct Stats {
     #[serde(skip_serializing_if = "is_zero")]
     pub kills: u32,

@@ -16,7 +16,7 @@ use tf_demo_parser::demo::{
 };
 use tracing::error;
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct PlayerSummary {
     pub name: String,
     pub steamid: String,
@@ -258,5 +258,20 @@ impl PlayerSummary {
             2.0 => self.handle_charge_quickfix(),
             x => error!("Unknown medigun charge type: {}", x),
         }
+    }
+
+    pub fn reset_stats(&mut self) {
+        self.stats = Stats::default();
+        self.classes.clear();
+        self.weapons.clear();
+        // scoreboard_healing is temporary and reset implicitly or explicitly elsewhere.
+        // postround_kills, assists, deaths are reset by virtue of Stats::default()
+        self.suicides = 0; // Reset suicides per round
+        self.captures = 0;
+        self.captures_blocked = 0;
+        // charge and kritzed are transient states, not long-term stats to be reset here.
+        // points, bonus_points, scoreboard_kills, scoreboard_assists, scoreboard_deaths, scoreboard_damage
+        // are generally cumulative or snapshot from game messages, not reset here unless explicitly required
+        // to be per-round from source. For now, assuming they reflect overall demo state or are updated by game.
     }
 }
