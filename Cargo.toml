@@ -21,23 +21,23 @@ name = "cli"
 path = "src/bin/cli.rs"
 
 [dependencies]
-actix-web = "4.9"
+actix-web = "4.12.1"
 actix-multipart = "0.7.2"
-tracing = { version = "0.1.41", features = ["release_max_level_info"] }
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-tf-demo-parser = { git = "https://github.com/demostf/parser.git", rev = "e7451375c250d49802948c9d6d6a535a9575e910" }
-tokio = { version = "1.24.2", features = ["rt", "rt-multi-thread", "macros"] }
-serde = { version = "1.0.197", features = ["derive"] }
-serde_json = "1.0.134"
-num_enum = "0.7.3"
-enumset = "1.1.5"
-awc = { version = "3.5.1", features = ["rustls"] }
-keyvalues-serde = "0.2.2"
-merge = "0.1.0"
-nalgebra = { version = "0.33.2", features = ["alga"] }
-parry3d = "0.18.0"
+tracing = { version = "0.1.44", features = ["release_max_level_info"] }
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+tokio = { version = "1.49.0", features = ["rt", "rt-multi-thread", "macros"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+num_enum = "0.7.5"
+enumset = "1.1.10"
+awc = { version = "3.8.1", features = ["rustls"] }
+keyvalues-serde = "0.2.3"
+merge = "0.2.0"
+nalgebra = { version = "0.34.1", features = ["alga"] }
+parry3d = "0.26.0"
 alga = "0.9"
-rapier3d = "0.23.0"
+rapier3d = "0.32.0"
 lazy_static = "1.5.0"
 optfield = "0.4.0"
 ustr = "1.1.0"
+tf-demo-parser = "0.6.4"

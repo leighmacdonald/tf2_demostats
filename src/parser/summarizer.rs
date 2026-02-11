@@ -15,8 +15,8 @@ use crate::{
 };
 use alga::linear::EuclideanSpace;
 use enumset::EnumSet;
-use nalgebra::Vector3;
 use num_enum::TryFromPrimitive;
+use parry3d::math::Vector;
 use rapier3d::prelude::{
     ColliderBuilder, ColliderHandle, ColliderSet, Cuboid, IslandManager, QueryPipeline,
     RigidBodySet,
@@ -140,7 +140,7 @@ pub struct MatchAnalyzer<'a> {
     airblasts: HashSet<u32>, // handles of players that airblasted this tick
 
     // Queryable geometry world. QVBH under the hood.
-    world: QueryPipeline,
+    world: QueryPipeline<'a>,
     island_manager: IslandManager,
     collider_set: ColliderSet,
     rigid_body_set: RigidBodySet, // unused, but needed for some APIs :\
@@ -163,7 +163,7 @@ pub struct MatchAnalyzerView<'a> {
     pub explosions: &'a mut Vec<Explosion>,
     pub tick_events: &'a mut Vec<Event>,
     pub schema: &'a Schema,
-    pub world: &'a QueryPipeline,
+    pub world: &'a QueryPipeline<'a>,
     pub collider_set: &'a ColliderSet,
     pub rigid_body_set: &'a RigidBodySet, // unused, but needed for some APIs :\
     pub tick: DemoTick,
@@ -304,7 +304,7 @@ impl<'a> MatchAnalyzer<'a> {
             explosions: Default::default(),
             airblasts: Default::default(),
             deleted_entities: Default::default(),
-            world: QueryPipeline::new(),
+            world: QueryPipeline(),
             island_manager: IslandManager::new(),
             collider_set: ColliderSet::with_capacity(ENTITY_COUNT),
             rigid_body_set: RigidBodySet::with_capacity(0),
@@ -1278,7 +1278,7 @@ impl<'a> MatchAnalyzer<'a> {
                 trace!("look at explosions {:?}", exps);
                 exps.sort_by(|a, b| a.1.total_cmp(&b.1));
                 let playerbox =
-                    Cuboid::new(Vector3::new(49.0, 49.0, 83.0)).aabb(&victim_origin.into());
+                    Cuboid::new(Vector::new(49.0, 49.0, 83.0)).aabb(&victim_origin.into());
 
                 let hit_exps = exps
                     .into_iter()

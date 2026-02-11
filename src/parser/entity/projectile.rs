@@ -11,8 +11,7 @@ use crate::{
     Vec3,
 };
 use enumset::EnumSet;
-use nalgebra::Vector3;
-use parry3d::shape::SharedShape;
+use parry3d::{math::Vector, shape::SharedShape};
 use rapier3d::prelude::{Aabb, Ball, BoundingVolume, Cuboid, QueryFilter};
 use std::any::Any;
 use tf_demo_parser::{
@@ -200,9 +199,9 @@ impl Projectile {
             || self.kind == ProjectileType::EnergyRing
         {
             let hitbox = if is_arrow(self.kind) {
-                Cuboid::new(Vector3::new(2.0, 2.0, 2.0))
+                Cuboid::new(Vector::new(2.0, 2.0, 2.0))
             } else {
-                Cuboid::new(Vector3::new(100.0, 100.0, 100.0))
+                Cuboid::new(Vector::new(100.0, 100.0, 100.0))
             };
 
             // TODO: do a proper ShapeCast if necessary...
