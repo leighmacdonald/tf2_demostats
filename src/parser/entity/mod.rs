@@ -1,7 +1,9 @@
 use crate::{parser::summarizer::MatchAnalyzerView, Vec3};
-use nalgebra::vector;
 use optfield::optfield;
-use parry3d::shape::{Cuboid, SharedShape};
+use parry3d::{
+    math::Vector,
+    shape::{Cuboid, SharedShape},
+};
 use std::any::Any;
 use tf_demo_parser::{demo::message::packetentities::PacketEntity, ParserState};
 
@@ -139,8 +141,8 @@ impl Entity for Unknown {
 
 lazy_static::lazy_static! {
     // TODO: real valuess, switch by sentry level
-    static ref SENTRY_BOX: SharedShape = SharedShape::new(Cuboid::new(vector![49.0, 49.0, 83.0]));
+    static ref SENTRY_BOX: SharedShape = SharedShape::new(Cuboid::new(Vector::new(49.0, 49.0, 83.0)));
 
     // TODO: real valuess, switch by projectile type
-    static ref PROJECTILE_BOX: SharedShape = SharedShape::new(Cuboid::new(vector![10.0, 10.0, 10.0]));
+    static ref PROJECTILE_BOX: SharedShape = SharedShape::new(Cuboid::new(Vector::new(10.0, 10.0, 10.0)));
 }

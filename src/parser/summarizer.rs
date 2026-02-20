@@ -15,8 +15,8 @@ use crate::{
 };
 use alga::linear::EuclideanSpace;
 use enumset::EnumSet;
-use nalgebra::Vector3;
 use num_enum::TryFromPrimitive;
+use parry3d::math::Vector;
 use rapier3d::prelude::{
     ColliderBuilder, ColliderHandle, ColliderSet, Cuboid, IslandManager, QueryPipeline,
     RigidBodySet,
@@ -1278,7 +1278,7 @@ impl<'a> MatchAnalyzer<'a> {
                 trace!("look at explosions {:?}", exps);
                 exps.sort_by(|a, b| a.1.total_cmp(&b.1));
                 let playerbox =
-                    Cuboid::new(Vector3::new(49.0, 49.0, 83.0)).aabb(&victim_origin.into());
+                    Cuboid::new(Vector::new(49.0, 49.0, 83.0)).aabb(&victim_origin.into());
 
                 let hit_exps = exps
                     .into_iter()

@@ -19,3 +19,4 @@ Cargo.lock
 *.dem
 /dist/
 .direnv
+.env
