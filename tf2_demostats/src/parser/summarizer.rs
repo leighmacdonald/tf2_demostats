@@ -1,9 +1,10 @@
 use crate::{
+    Vec3,
     parser::{
         entity::{self, Entity, ProjectileType},
         game::{
-            Damage, DamageEffect, DamageType, Death, PlayerAnimation, RoundState, WeaponId,
-            INVALID_HANDLE,
+            Damage, DamageEffect, DamageType, Death, INVALID_HANDLE, PlayerAnimation, RoundState,
+            WeaponId,
         },
         is_false,
         player::PlayerSummary,
@@ -11,7 +12,6 @@ use crate::{
         weapon::{self, projectile_log_name, sentry_name, taunt_log_name},
     },
     schema::{Item, Schema},
-    Vec3,
 };
 use alga::linear::EuclideanSpace;
 use enumset::EnumSet;
@@ -27,6 +27,7 @@ use std::{
     sync::Arc,
 };
 use tf_demo_parser::{
+    MessageType, ParserState, ReadResult, Stream,
     demo::{
         data::{DemoTick, MaybeUtf8String, UserInfo},
         gameevent_gen::{
@@ -35,22 +36,21 @@ use tf_demo_parser::{
         },
         gamevent::GameEvent,
         message::{
+            Message, NetTickMessage,
             gameevent::GameEventMessage,
             packetentities::{EntityId, PacketEntity, UpdateType},
             usermessage::{ChatMessageKind, UserMessage},
-            Message, NetTickMessage,
         },
         packet::{
             datatable::{ClassId, ParseSendTable, ServerClass},
             stringtable::StringTableEntry,
         },
         parser::{
-            gamestateanalyser::{Class, Team, UserId},
             MessageHandler,
+            gamestateanalyser::{Class, Team, UserId},
         },
         sendprop::SendPropValue,
     },
-    MessageType, ParserState, ReadResult, Stream,
 };
 use tracing::{debug, error, span::EnteredSpan, trace, warn};
 
@@ -474,8 +474,8 @@ impl<'a> MatchAnalyzer<'a> {
                     //  - if projectile impacts and explodes on the first tick, no
                     //    projectile entity is created.
                     error!(
-												"Blast damage without a matching explosion type:{damage_type:?} (distance {d})"
-										);
+                        "Blast damage without a matching explosion type:{damage_type:?} (distance {d})"
+                    );
                 }
             }
         }
@@ -1084,11 +1084,15 @@ impl<'a> MatchAnalyzer<'a> {
             }
 
             trace!(
-								"{}death with {} / {} damage_type:{damage_type:?} flags:{flags:?} bits:{damage_bits:?}   {death:?}",
-								if damage_bits.contains(Damage::Blast) { "blast " } else { "" },
-								death.weapon,
-								death.weapon_log_class_name,
-						);
+                "{}death with {} / {} damage_type:{damage_type:?} flags:{flags:?} bits:{damage_bits:?}   {death:?}",
+                if damage_bits.contains(Damage::Blast) {
+                    "blast "
+                } else {
+                    ""
+                },
+                death.weapon,
+                death.weapon_log_class_name,
+            );
 
             if let Some(attacker) = self.player_summaries.get_mut(&attacker_steamid) {
                 attacker.handle_kill(self.round_state, my_name, flags, damage_type, airshot);
@@ -1207,7 +1211,9 @@ impl<'a> MatchAnalyzer<'a> {
 
         let attacker_steamid = self.user_id_to_steam_id.get(&attacker_user_id).cloned();
         let Some(attacker_steamid) = attacker_steamid else {
-            error!("Unknown attacker steamid mapping for user_id {attacker_user_id} in player hurt event");
+            error!(
+                "Unknown attacker steamid mapping for user_id {attacker_user_id} in player hurt event"
+            );
             return;
         };
         let Some(attacker_summary_for_lookup) = self.player_summaries.get(&attacker_steamid) else {
@@ -1286,7 +1292,18 @@ impl<'a> MatchAnalyzer<'a> {
                     .collect::<Vec<_>>();
 
                 if let Some((e, _dist)) = hit_exps.first() {
-                    trace!("Hit by explosion! {:?} damage_type:{damage_type:?} effect:{effect:?}  weapon_type:{weapon_type:?}     {hit_exps:?}", format!("{:?}-{:?}-{:?}", e.projectile.class_name, e.projectile.grenade_type, e.projectile.model_id.as_ref().and_then(|id| self.models.get(id))));
+                    trace!(
+                        "Hit by explosion! {:?} damage_type:{damage_type:?} effect:{effect:?}  weapon_type:{weapon_type:?}     {hit_exps:?}",
+                        format!(
+                            "{:?}-{:?}-{:?}",
+                            e.projectile.class_name,
+                            e.projectile.grenade_type,
+                            e.projectile
+                                .model_id
+                                .as_ref()
+                                .and_then(|id| self.models.get(id))
+                        )
+                    );
 
                     let mut e = (*hit_exps.first().unwrap().0).clone();
                     if self.airblasts.contains(&attacker_handle) {
@@ -1382,11 +1399,9 @@ impl<'a> MatchAnalyzer<'a> {
             };
             let amount = hurt.damage_amount;
             debug!(
-								"{victim_user_id} hurt by {attacker_user_id} {attacker_class:?} as {amount} x {damage_type:?} ({effect:?}) with {weapon_type:?} vs entity: {} / {:?}   explosions:{:?}   {hurt:?}",
-								wep.class_name,
-								wi.item_type_name,
-								self.explosions
-						);
+                "{victim_user_id} hurt by {attacker_user_id} {attacker_class:?} as {amount} x {damage_type:?} ({effect:?}) with {weapon_type:?} vs entity: {} / {:?}   explosions:{:?}   {hurt:?}",
+                wep.class_name, wi.item_type_name, self.explosions
+            );
         } else {
             error!(
                 "hurt with {} but unknown player weapon handle: {attacker_wep} {hurt:?}",
@@ -1394,7 +1409,9 @@ impl<'a> MatchAnalyzer<'a> {
             );
         }
         let Some(attacker) = self.player_summaries.get_mut(&attacker_steamid) else {
-            error!("Unknown attacker summary (mut) for steamid {attacker_steamid} in player hurt event");
+            error!(
+                "Unknown attacker summary (mut) for steamid {attacker_steamid} in player hurt event"
+            );
             return;
         };
 
@@ -1485,7 +1502,9 @@ impl<'a> MatchAnalyzer<'a> {
                         continue;
                     };
                     let Some(player) = self.player_summaries.get_mut(&steamid) else {
-                        error!("Invalid owner steamid {steamid} for medigun {handle} when it was charged");
+                        error!(
+                            "Invalid owner steamid {steamid} for medigun {handle} when it was charged"
+                        );
                         continue;
                     };
                     player.handle_charged(item);
@@ -1659,7 +1678,9 @@ impl MessageHandler for MatchAnalyzer<'_> {
                             name_id.map(|id| self.effects.get(&id).map(|e: &String| e.as_str()));
 
                         let (Some(entity), Some(name)) = (entity, name) else {
-                            trace!("Effect does not have both name:{name:?} and an entity:{entity:?} from {e:?}");
+                            trace!(
+                                "Effect does not have both name:{name:?} and an entity:{entity:?} from {e:?}"
+                            );
                             return;
                         };
                         let Some(ent) = self.entities.get(entity as usize).and_then(|e| e.as_ref())
@@ -1693,18 +1714,15 @@ impl MessageHandler for MatchAnalyzer<'_> {
 
                             if let Some((explosion, _)) =
                                 explosions.iter().max_by(|x, y| x.1.total_cmp(&y.1))
+                                && explosion.projectile.kind == ProjectileType::HealingBolt
+                                && !explosion.projectile.is_reflected
                             {
-                                if explosion.projectile.kind == ProjectileType::HealingBolt
-                                    && !explosion.projectile.is_reflected
-                                {
-                                    let o = explosion.projectile.owner;
-                                    let Some(attacker) = self.get_player_summary_mut_handle(&o)
-                                    else {
-                                        error!("Could not find player that fired healing bolt");
-                                        continue;
-                                    };
-                                    attacker.handle_shot_hit("crusaders_crossbow");
-                                }
+                                let o = explosion.projectile.owner;
+                                let Some(attacker) = self.get_player_summary_mut_handle(&o) else {
+                                    error!("Could not find player that fired healing bolt");
+                                    continue;
+                                };
+                                attacker.handle_shot_hit("crusaders_crossbow");
                             }
                         }
                     } else if class.name == "CTEFireBullets" {
@@ -1735,14 +1753,14 @@ impl MessageHandler for MatchAnalyzer<'_> {
                         let Some(weapon) = self.get_weapon(&pe.last_active_weapon_handle) else {
                             error!(
                                 "Could not find active weapon ({}) for player that fired bullets {player:?}",
-																pe.last_active_weapon_handle
+                                pe.last_active_weapon_handle
                             );
                             continue;
                         };
                         let Some(item) = self.schema.items.get(&weapon.schema_id) else {
                             error!(
                                 "Could not find item schema for weapon ({}) for fired bullets {player:?}",
-																weapon.schema_id
+                                weapon.schema_id
                             );
                             continue;
                         };
@@ -1783,10 +1801,10 @@ impl MessageHandler for MatchAnalyzer<'_> {
                             .user_entities
                             .get(&eid)
                             .and_then(|uid| self.user_id_to_steam_id.get(uid));
-                        if let Some(steamid) = steamid {
-                            if let Some(p) = self.player_summaries.get(steamid) {
-                                self.current_round.mvps.push(p.steamid.clone());
-                            }
+                        if let Some(steamid) = steamid
+                            && let Some(p) = self.player_summaries.get(steamid)
+                        {
+                            self.current_round.mvps.push(p.steamid.clone());
                         }
                     }
                 }
@@ -1899,13 +1917,20 @@ impl MessageHandler for MatchAnalyzer<'_> {
                                         // Could not get weapon item, proceed with original weapon name if any
                                     }
                                 } else {
-                                    error!("Could not find player entity {} for object destroyed event", player_summary.entity_id);
+                                    error!(
+                                        "Could not find player entity {} for object destroyed event",
+                                        player_summary.entity_id
+                                    );
                                 }
                             } else {
-                                error!("Could not find player summary for steamid of attacker_uid {attacker_uid} for object destroyed event");
+                                error!(
+                                    "Could not find player summary for steamid of attacker_uid {attacker_uid} for object destroyed event"
+                                );
                             }
                         } else {
-                            error!("Could not find steamid for attacker_uid {attacker_uid} for object destroyed event");
+                            error!(
+                                "Could not find steamid for attacker_uid {attacker_uid} for object destroyed event"
+                            );
                         }
                     }
 
@@ -1914,10 +1939,14 @@ impl MessageHandler for MatchAnalyzer<'_> {
                         if let Some(attacker) = self.player_summaries.get_mut(&steamid) {
                             attacker.handle_object_destroyed(weapon);
                         } else {
-                            error!("Could not find attacker summary for steamid {steamid} that destroyed building {e:?}");
+                            error!(
+                                "Could not find attacker summary for steamid {steamid} that destroyed building {e:?}"
+                            );
                         }
                     } else {
-                        error!("Could not find steamid for attacker_uid {attacker_uid} that destroyed building {e:?}");
+                        error!(
+                            "Could not find steamid for attacker_uid {attacker_uid} that destroyed building {e:?}"
+                        );
                     }
                 }
 
@@ -2001,10 +2030,10 @@ impl MessageHandler for MatchAnalyzer<'_> {
         let mut edges = HashMap::<&str, Vec<&str>>::new();
         for table in parse_tables {
             let name = table.name.as_str();
-            if let Some(baseclass) = table.props.iter().find(|p| p.name == "baseclass") {
-                if let Some(basename) = &baseclass.table_name {
-                    edges.entry(basename).or_default().push(name);
-                }
+            if let Some(baseclass) = table.props.iter().find(|p| p.name == "baseclass")
+                && let Some(basename) = &baseclass.table_name
+            {
+                edges.entry(basename).or_default().push(name);
             }
         }
 
@@ -2070,13 +2099,13 @@ impl MessageHandler for MatchAnalyzer<'_> {
 mod tests {
     use super::*;
     use tf_demo_parser::{
+        ParserState,
         demo::{
             data::userinfo::PlayerInfo,
-            message::{packetentities::BaselineIndex, Message},
+            message::{Message, packetentities::BaselineIndex},
             packet::{datatable::ServerClass, stringtable::StringTableEntry},
             parser::gamestateanalyser::UserId,
         },
-        ParserState,
     };
 
     // Returns ServerClass with 'static lifetime for strings

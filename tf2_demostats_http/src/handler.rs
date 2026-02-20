@@ -1,7 +1,10 @@
-use crate::{parser, schema::Schema};
-use actix_multipart::form::{tempfile::TempFile, MultipartForm};
-use actix_web::{web, HttpResponse, Responder};
+use actix_multipart::form::{MultipartForm, tempfile::TempFile};
+use actix_web::{HttpResponse, Responder, web};
 use std::io::Read;
+use tf2_demostats::{
+    parser,
+    schema::{self},
+};
 use tracing::error;
 
 #[derive(Debug, MultipartForm)]
@@ -12,7 +15,7 @@ pub struct UploadForm {
 
 pub async fn save_files(
     MultipartForm(mut form): MultipartForm<UploadForm>,
-    schema: web::Data<Schema>,
+    schema: web::Data<schema::Schema>,
 ) -> impl Responder {
     let mut buffer = Vec::new();
 

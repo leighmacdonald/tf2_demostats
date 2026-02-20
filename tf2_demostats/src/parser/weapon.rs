@@ -172,10 +172,10 @@ pub fn projectile_log_name(
         if let Some(ref ln) = item.item_logname {
             return ustr::ustr(ln).as_str();
         }
-        if let Some(ref class) = item.item_class {
-            if class == "tf_weapon_rocketlauncher_directhit" {
-                return "rocketlauncher_directhit";
-            }
+        if let Some(ref class) = item.item_class
+            && class == "tf_weapon_rocketlauncher_directhit"
+        {
+            return "rocketlauncher_directhit";
         }
     }
     if let Some(t) = p.grenade_type {

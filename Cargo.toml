@@ -1,44 +1,28 @@
-[package]
-name = "tf2_demostats"
-description = "Summarize detailed match stats"
+[workspace]
+members = ["tf2_demostats", "tf2_demostats_cli", "tf2_demostats_http"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.7"
-authors = ["Leigh MacDonald <leigh.macdonald@gmail.com>"]
+description = "demoparser"
+readme = "README.md"
 license = "MIT"
-repository = "https://github.com/leighmacdonald/tf2_demostats"
-edition = "2021"
-default-run = "demostats"
+authors = ["Leigh MacDonald <leigh.macdonald@gmail.com>"]
 
-[lib]
-name = "tf2_demostats"
-path = "src/lib.rs"
+[profile.dev]
+opt-level = 1          # Low-level optimization for faster dev builds
+debug = true           # Include debug symbols
+overflow-checks = true
 
-[[bin]]
-name = "demostats"
-path = "src/bin/main.rs"
+[profile.release]
+opt-level = 3   # Maximum optimization for performance
+debug = false   # Exclude debug symbols for smaller binary size
+lto = true      # Link-Time Optimization for further size reduction
+panic = "abort" # Use `abort` to reduce binary size further
 
-[[bin]]
-name = "cli"
-path = "src/bin/cli.rs"
-
-[dependencies]
-actix-web = "4.13.0"
-actix-multipart = "0.7.2"
-tracing = { version = "0.1.44", features = ["release_max_level_info"] }
-tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
-tokio = { version = "1.49.0", features = ["rt", "rt-multi-thread", "macros"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-num_enum = "0.7.5"
-enumset = "1.1.10"
-awc = { version = "3.8.2", features = ["rustls"] }
-keyvalues-serde = "0.2.3"
-merge = "0.2.0"
-nalgebra = { version = "0.33.2", features = ["alga"] }
-parry3d = "0.18.0"
-alga = "0.9"
-rapier3d = "0.23.0"
-lazy_static = "1.5.0"
-optfield = "0.4.0"
-ustr = "1.1.0"
-tf-demo-parser = "0.6.4"
-dotenv = "0.15.0"
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# doc_markdown = "allow"
+# missing_errors_doc = "allow"
+# must_use_candidate = "allow"
+# too_many_lines = "allow"

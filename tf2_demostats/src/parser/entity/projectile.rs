@@ -1,5 +1,5 @@
 use crate::{
-    convert_vec,
+    Vec3, convert_vec,
     parser::{
         entity::{Entity, EntityClass, PROJECTILE_BOX},
         game::{Effects, GrenadeType, INVALID_HANDLE},
@@ -8,18 +8,17 @@ use crate::{
         weapon::projectile_explosion_radius,
     },
     schema::{Attribute, StringAttribute},
-    Vec3,
 };
 use enumset::EnumSet;
 use parry3d::{math::Vector, shape::SharedShape};
 use rapier3d::prelude::{Aabb, Ball, BoundingVolume, Cuboid, QueryFilter};
 use std::any::Any;
 use tf_demo_parser::{
+    ParserState,
     demo::{
         message::packetentities::PacketEntity, packet::datatable::ClassId, parser::analyser::Team,
         sendprop::SendPropValue,
     },
-    ParserState,
 };
 use tracing::error;
 
