@@ -1,6 +1,6 @@
 use std::{env, path};
-use tf2_demostats::{parser, schema, Result};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tf2_demostats::{Result, parser, schema};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 extern crate dotenv;
 
 use dotenv::dotenv;

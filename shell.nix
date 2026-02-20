@@ -24,5 +24,6 @@ in
       just-lsp
       nix
       nixd
+      cargo-machete
     ];
   }

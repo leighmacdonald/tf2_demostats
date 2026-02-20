@@ -13,6 +13,7 @@ builds:
       #- x86_64-pc-windows-gnu
     flags:
       - --release
+      - --package=tf2_demostats_cli
 
 archives:
   - format: tar.gz

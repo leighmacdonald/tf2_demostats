@@ -1,10 +1,11 @@
-use actix_multipart::form::tempfile::TempFileConfig;
 use actix_multipart::form::MultipartFormConfig;
-use actix_web::{error, middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer};
+use actix_multipart::form::tempfile::TempFileConfig;
+use actix_web::{App, Error, HttpRequest, HttpResponse, HttpServer, error, middleware, web};
 use std::{env, fs};
-use tf2_demostats::{schema, web::handler, Result};
+use tf2_demostats::{Result, schema};
+use tf2_demostats_http::handler;
 use tracing::info;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 extern crate dotenv;
 
 use dotenv::dotenv;
