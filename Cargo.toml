@@ -21,7 +21,7 @@ name = "cli"
 path = "src/bin/cli.rs"
 
 [dependencies]
-actix-web = "4.12.1"
+actix-web = "4.13.0"
 actix-multipart = "0.7.2"
 tracing = { version = "0.1.44", features = ["release_max_level_info"] }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
@@ -30,13 +30,13 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 num_enum = "0.7.5"
 enumset = "1.1.10"
-awc = { version = "3.8.1", features = ["rustls"] }
+awc = { version = "3.8.2", features = ["rustls"] }
 keyvalues-serde = "0.2.3"
 merge = "0.2.0"
-nalgebra = { version = "0.34.1", features = ["alga"] }
-parry3d = "0.26.0"
+nalgebra = { version = "0.33.2", features = ["alga"] }
+parry3d = "0.18.0"
 alga = "0.9"
-rapier3d = "0.32.0"
+rapier3d = "0.23.0"
 lazy_static = "1.5.0"
 optfield = "0.4.0"
 ustr = "1.1.0"

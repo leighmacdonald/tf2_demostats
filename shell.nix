@@ -21,5 +21,8 @@ in
       goreleaser
       zig # required by goreleaser
       just
+      just-lsp
+      nix
+      nixd
     ];
   }

@@ -1,1 +1,0 @@
-curl -v -i --form "file=@test.dem" http://localhost:8811/
