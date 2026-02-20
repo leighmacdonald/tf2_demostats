@@ -5,6 +5,9 @@ use std::{env, fs};
 use tf2_demostats::{schema, web::handler, Result};
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+extern crate dotenv;
+
+use dotenv::dotenv;
 
 fn handle_multipart_error(err: actix_multipart::MultipartError, _req: &HttpRequest) -> Error {
     let response = HttpResponse::BadRequest().force_close().finish();
@@ -13,6 +16,7 @@ fn handle_multipart_error(err: actix_multipart::MultipartError, _req: &HttpReque
 
 #[actix_web::main]
 async fn main() -> Result<()> {
+    dotenv().ok();
     let host = env::var("DEMO_HOST").unwrap_or_else(|_e| String::from("0.0.0.0"));
     let port = env::var("DEMO_PORT")
         .unwrap_or_else(|_e| String::from("8811"))

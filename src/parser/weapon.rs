@@ -10,6 +10,7 @@ use tf_demo_parser::demo::parser::analyser::{Class, Team};
 use tracing::{error, trace};
 
 #[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd, Default)]
+#[allow(dead_code)]
 pub enum Weapon {
     #[default]
     Unknown,

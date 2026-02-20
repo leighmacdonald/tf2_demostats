@@ -1,9 +1,13 @@
 use std::{env, path};
 use tf2_demostats::{parser, schema, Result};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+extern crate dotenv;
+
+use dotenv::dotenv;
 
 #[actix_web::main]
 async fn main() -> Result<()> {
+    dotenv().ok();
     tracing_subscriber::registry()
         .with(
             fmt::layer()
