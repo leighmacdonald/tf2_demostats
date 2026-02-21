@@ -30,10 +30,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    #[command(about = "version information")]
+    #[command(about = "Version & build information")]
     Version,
 
-    #[command(about = "parse demo")]
+    #[command(about = "Parse a demo")]
     Parse {
         #[arg(short, long, default_value = DEFAULT_SCHEMA)]
         schema: PathBuf,
@@ -41,7 +41,7 @@ enum Commands {
         #[arg(required=true, value_hint = ValueHint::FilePath, num_args = 1..)]
         demo: Vec<PathBuf>,
     },
-    #[command(about = "Update the local schema")]
+    #[command(about = "Update the local schema schema cache")]
     Update {
         #[arg(short, long, default_value = DEFAULT_SCHEMA)]
         schema: PathBuf,
@@ -49,6 +49,7 @@ enum Commands {
         #[arg(
             short,
             long,
+            env = "STEAM_API_KEY",
             help = "Steam Web API key. See: https://steamcommunity.com/dev/apikey"
         )]
         api_key: String,
