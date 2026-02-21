@@ -2,7 +2,7 @@ use crate::Result;
 use awc::Client;
 use merge::Merge;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, env};
+use std::{collections::HashMap, fs::File, io::Write, path::Path};
 use tracing::error;
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -291,46 +291,40 @@ struct ApiResponse<T> {
     result: T,
 }
 
-async fn fetch_bytes() -> Result<String> {
-    let schema_path_var = std::env::var("TF2_SCHEMA_PATH").or(env::var("DEMO_TF2_SCHEMA_PATH"));
-    if let Ok(schema_string) = schema_path_var {
-        let schema_path = std::path::Path::new(&schema_string);
-        return Ok(std::fs::read_to_string(schema_path)
-            .map_err(|e| format!("Error {e}: While reading {schema_path:?}"))?);
-    }
-
-    let api_key = env::var("STEAM_API_KEY")
-        .or(env::var("DEMO_STEAM_API_KEY"))
-        .expect("STEAM_API_KEY must be set")
-        .to_string();
+pub async fn download_schema(api_key: String, path: &Path) -> Result<()> {
     let client = Client::default();
-
     let schema_url =
         format!("https://api.steampowered.com/IEconItems_440/GetSchemaURL/v0001/?key={api_key}");
     let mut response = client.get(schema_url).send().await?;
     let body: ApiResponse<SchemaUrl> = response.json().await?;
+    let mut response = client.get(body.result.items_game_url).send().await?;
+    let mut out_path = File::create(path)?;
+    let b = response.body().limit(10_000_000).await?;
+    out_path.write_all(&b)?;
 
-    let vdf_url = body.result.items_game_url;
-    let mut response = client.get(vdf_url).send().await?;
-    Ok(std::str::from_utf8(&response.body().await?)?.to_string())
+    Ok(())
 }
 
-pub async fn fetch() -> Result<Schema> {
-    let s = fetch_bytes().await?;
-    let v = keyvalues_serde::from_str_raw::<ItemsGameFile>(&s)?;
+pub async fn read(schema_path: &Path) -> Result<Schema> {
+    let schema_body = match schema_path.exists() {
+        true => std::fs::read_to_string(schema_path)
+            .map_err(|e| format!("Error {e}: While reading {schema_path:?}"))?,
+        false => return Err("Schema file not found".into()),
+    };
+    let game_file = keyvalues_serde::from_str_raw::<ItemsGameFile>(&schema_body)?;
 
     let mut schema = Schema {
         items: Default::default(),
-        prefabs: v.prefabs,
+        prefabs: game_file.prefabs,
     };
 
-    let def = v
+    let def = game_file
         .items
         .get("default")
         .ok_or("Schema is missing default item entry")?
         .clone();
 
-    for (k, i) in v.items {
+    for (k, i) in game_file.items {
         if k == "default" {
             continue;
         }

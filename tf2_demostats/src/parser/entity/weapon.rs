@@ -5,10 +5,10 @@ use crate::parser::{
 };
 use std::any::Any;
 use tf_demo_parser::{
+    ParserState,
     demo::{
         message::packetentities::PacketEntity, packet::datatable::ClassId, sendprop::SendPropValue,
     },
-    ParserState,
 };
 use tracing::trace;
 
@@ -95,10 +95,11 @@ impl Entity for Weapon {
         let mut p = WeaponPatch::default();
         Weapon::parse(packet, parser_state, &mut p);
 
-        if let Some(released) = p.charge_released {
-            if released && self.charge_released != released {
-                game.tick_events.push(Event::MedigunCharged(self.handle));
-            }
+        if let Some(released) = p.charge_released
+            && released
+            && self.charge_released != released
+        {
+            game.tick_events.push(Event::MedigunCharged(self.handle));
         }
 
         Box::new(p)

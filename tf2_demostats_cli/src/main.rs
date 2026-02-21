@@ -1,13 +1,92 @@
-use std::{env, path};
-use tf2_demostats::{Result, parser, schema};
+use clap::{CommandFactory, Parser, Subcommand, ValueHint};
+use std::{
+    env,
+    fs::File,
+    io,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
+use tf2_demostats::{
+    Result, parser,
+    schema::{self, download_schema},
+};
+use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 extern crate dotenv;
 
 use dotenv::dotenv;
 
+const DEFAULT_SCHEMA: &str = "schema.json";
+
+#[derive(Parser, Debug)]
+#[command(name = "completion-derive")]
+struct Cli {
+    #[arg(long = "generate", value_enum)]
+    generator: Option<clap_complete::Shell>,
+
+    #[command(subcommand)]
+    pub command: Commands,
+}
+
+#[derive(Debug, Subcommand)]
+enum Commands {
+    #[command(about = "Version & build information")]
+    Version,
+
+    #[command(about = "Parse a demo")]
+    Parse {
+        #[arg(short, long, default_value = DEFAULT_SCHEMA)]
+        schema: PathBuf,
+
+        #[arg(required=true, value_hint = ValueHint::FilePath, num_args = 1..)]
+        demo: Vec<PathBuf>,
+    },
+    #[command(about = "Update the local schema schema cache")]
+    Update {
+        #[arg(short, long, default_value = DEFAULT_SCHEMA)]
+        schema: PathBuf,
+
+        #[arg(
+            short,
+            long,
+            env = "STEAM_API_KEY",
+            help = "Steam Web API key. See: https://steamcommunity.com/dev/apikey"
+        )]
+        api_key: String,
+    },
+    #[command(about = "Start HTTP server")]
+    Serve {
+        #[arg(short, long, default_value = DEFAULT_SCHEMA)]
+        schema: PathBuf,
+
+        #[arg(short('H'), long, default_value = "0.0.0.0")]
+        host: String,
+
+        #[arg(short, long, default_value = "8811")]
+        port: u16,
+    },
+}
+
 #[actix_web::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
     dotenv().ok();
+
+    match exec().await {
+        Err(e) => {
+            error!("Error: {}", e);
+            return ExitCode::FAILURE;
+        }
+        Ok(_) => ExitCode::SUCCESS,
+    }
+}
+async fn exec() -> Result<()> {
+    let args = Cli::parse();
+    if let Some(generator) = args.generator {
+        let mut cmd = Cli::command();
+        print_completions(generator, &mut cmd);
+        return Ok(());
+    }
+
     tracing_subscriber::registry()
         .with(
             fmt::layer()
@@ -17,25 +96,58 @@ async fn main() -> Result<()> {
         )
         .with(EnvFilter::from_default_env())
         .init();
+    match args.command {
+        Commands::Version => cmd_version().await,
+        Commands::Parse { schema, demo } => cmd_parse(&schema, demo).await,
+        Commands::Update {
+            schema,
+            api_key: key,
+        } => cmd_schema(key, &schema).await,
+        Commands::Serve { schema, host, port } => cmd_serve(&schema, host, port).await,
+    }
+}
 
-    let schema = schema::fetch().await?;
+fn print_completions<G: clap_complete::Generator>(generator: G, cmd: &mut clap::Command) {
+    clap_complete::generate(
+        generator,
+        cmd,
+        cmd.get_name().to_string(),
+        &mut io::stdout(),
+    );
+}
 
-    let multiple_files = env::args().len() > 2;
+async fn cmd_serve(schema_path: &Path, host: String, port: u16) -> Result<()> {
+    tf2_demostats_http::serve(schema_path, host, port).await?;
 
-    for arg in env::args().skip(1) {
-        let path = path::Path::new(&arg);
+    Ok(())
+}
+
+async fn cmd_parse(schema_path: &Path, demo_paths: Vec<PathBuf>) -> Result<()> {
+    let schema = schema::read(schema_path).await?;
+
+    for mut demo_path in demo_paths {
+        let path = demo_path.as_path();
         let bytes = tokio::fs::read(path).await?;
 
-        let _span_guard = if multiple_files {
-            Some(tracing::error_span!("Demo", "{}", arg).entered())
-        } else {
-            None
-        };
-
         let mut demo = parser::parse(&bytes, &schema).expect("Demo should parse");
-        demo.filename = Some(arg);
-        println!("{}", serde_json::to_string(&demo).unwrap());
+        demo.filename = Some(String::from(demo_path.to_str().unwrap()));
+        demo_path.add_extension("json");
+        let mut out_file = File::create(demo_path)?;
+        serde_json::to_writer(&mut out_file, &demo)?;
     }
+
+    Ok(())
+}
+
+async fn cmd_version() -> Result<()> {
+    println!("tf2_demostats {}", env!("CARGO_PKG_VERSION"));
+
+    Ok(())
+}
+
+async fn cmd_schema(api_key: String, schema_path: &Path) -> Result<()> {
+    download_schema(api_key, schema_path).await?;
+    info!("Schema downloaded successfully: {}", schema_path.display());
 
     Ok(())
 }
