@@ -20,4 +20,5 @@ Cargo.lock
 /dist/
 .direnv
 .env
-schema.json
+*.dem
+*.json

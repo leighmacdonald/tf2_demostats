@@ -8,6 +8,8 @@ license.workspace = true
 
 [dependencies]
 actix-web = "4.13.0"
+clap = { version = "4.5.60", features = ["derive", "color", "env"] }
+clap_complete = "4.5.66"
 dotenv = "0.15.0"
 tracing = { version = "0.1.44", features = ["release_max_level_info"] }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
@@ -19,7 +21,7 @@ tokio = { version = "1.49.0", features = [
     "fs",
 ] }
 tf2_demostats = { path = "../tf2_demostats" }
-
+tf2_demostats_http = { path = "../tf2_demostats_http" }
 
 [[bin]]
 name = "tf2_demostats"

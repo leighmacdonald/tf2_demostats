@@ -439,14 +439,14 @@ impl<'a> MatchAnalyzer<'a> {
             let mut exps: Vec<_> = dmg_to_victim
                 .iter()
                 .filter_map(|h| {
-                    if let HurtSource::Explosion(e) = &h.source {
-                        if e.projectile.owner() == Some(attacker_handle)
+                    if let HurtSource::Explosion(e) = &h.source
+                        && (e.projectile.owner() == Some(attacker_handle)
                             || e.projectile.original_owner == attacker_handle
-                            || self.airblasts.contains(&attacker_handle)
-                        {
-                            return Some(e);
-                        }
+                            || self.airblasts.contains(&attacker_handle))
+                    {
+                        return Some(e);
                     }
+
                     None
                 })
                 .collect();
@@ -673,7 +673,7 @@ impl<'a> MatchAnalyzer<'a> {
                 e.apply_preserve(update);
             }
             UpdateType::Delete | UpdateType::Leave => {
-                self.deleted_entities.insert(packet.entity_index.clone());
+                self.deleted_entities.insert(packet.entity_index);
 
                 if !packet.props.is_empty() {
                     error!(
@@ -789,87 +789,87 @@ impl<'a> MatchAnalyzer<'a> {
                     .and_then(|uid| self.user_id_to_steam_id.get(uid))
                     .cloned();
 
-                if let Some(steamid) = steamid {
-                    if let Some(player) = self.player_summaries.get_mut(&steamid) {
-                        match table_name.as_str() {
-                            "m_iTeam" => {}
-                            "m_iHealing" => {
-                                let hi = i64::try_from(&prop.value).unwrap_or_default();
-                                if hi < 0 {
-                                    error!("Negative healing of {hi} by {}", player.name);
-                                    return;
-                                }
-                                let h = hi as u32;
+                if let Some(steamid) = steamid
+                    && let Some(player) = self.player_summaries.get_mut(&steamid)
+                {
+                    match table_name.as_str() {
+                        "m_iTeam" => {}
+                        "m_iHealing" => {
+                            let hi = i64::try_from(&prop.value).unwrap_or_default();
+                            if hi < 0 {
+                                error!("Negative healing of {hi} by {}", player.name);
+                                return;
+                            }
+                            let h = hi as u32;
 
-                                // Skip the first real value; sometimes STV starts a little late and
-                                // we can't distinguish the healing values.
-                                if player.scoreboard_healing == 0 {
-                                    player.scoreboard_healing = h;
-                                    return;
-                                }
-
-                                // Add up deltas, as this tracker resets to 0 mid round.
-                                let dh = h.saturating_sub(player.scoreboard_healing);
-                                if dh > 300 {
-                                    // Never saw a delta this large in our corpus; may be a sign of
-                                    // a miscount
-                                    warn!("Huge healing delta of {dh} by {}", player.name);
-                                }
-
-                                player.handle_healing(round_state, dh);
-
+                            // Skip the first real value; sometimes STV starts a little late and
+                            // we can't distinguish the healing values.
+                            if player.scoreboard_healing == 0 {
                                 player.scoreboard_healing = h;
+                                return;
                             }
-                            "m_iTotalScore" => {
-                                player.points =
-                                    Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
+
+                            // Add up deltas, as this tracker resets to 0 mid round.
+                            let dh = h.saturating_sub(player.scoreboard_healing);
+                            if dh > 300 {
+                                // Never saw a delta this large in our corpus; may be a sign of
+                                // a miscount
+                                warn!("Huge healing delta of {dh} by {}", player.name);
                             }
-                            "m_iDamage" => {
-                                player.scoreboard_damage =
-                                    Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
-                            }
-                            "m_iDeaths" => {
-                                player.scoreboard_deaths =
-                                    Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
-                            }
-                            "m_iScore" => {
-                                // iScore is close to number of kills; but counts post-game kills and decrements on suicide.
-                                player.scoreboard_kills =
-                                    Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
-                            }
-                            "m_iBonusPoints" => {
-                                player.bonus_points =
-                                    Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
-                            }
-                            "m_iPlayerClass" => {}
-                            "m_iPlayerLevel" => {}
-                            "m_bAlive" => {}
-                            "m_flNextRespawnTime" => {}
-                            "m_iActiveDominations" => {}
-                            "m_iDamageAssist" => {}
-                            "m_iPing" => {}
-                            "m_iChargeLevel" => {}
-                            "m_iStreaks" => {}
-                            "m_iHealth" => {}
-                            "m_iMaxHealth" => {}
-                            "m_iMaxBuffedHealth" => {}
-                            "m_iPlayerClassWhenKilled" => {}
-                            "m_bValid" => {}
-                            "m_iUserID" => {}
-                            "m_iConnectionState" => {}
-                            "m_flConnectTime" => {}
-                            "m_iDamageBoss" => {}
-                            "m_bArenaSpectator" => {}
-                            "m_iHealingAssist" => {}
-                            "m_iBuybackCredits" => {}
-                            "m_iUpgradeRefundCredits" => {}
-                            "m_iCurrencyCollected" => {}
-                            "m_iDamageBlocked" => {}
-                            "m_iAccountID" => {}
-                            "m_bConnected" => {}
-                            x => {
-                                error!("Unhandled player resource type: {x}");
-                            }
+
+                            player.handle_healing(round_state, dh);
+
+                            player.scoreboard_healing = h;
+                        }
+                        "m_iTotalScore" => {
+                            player.points =
+                                Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
+                        }
+                        "m_iDamage" => {
+                            player.scoreboard_damage =
+                                Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
+                        }
+                        "m_iDeaths" => {
+                            player.scoreboard_deaths =
+                                Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
+                        }
+                        "m_iScore" => {
+                            // iScore is close to number of kills; but counts post-game kills and decrements on suicide.
+                            player.scoreboard_kills =
+                                Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
+                        }
+                        "m_iBonusPoints" => {
+                            player.bonus_points =
+                                Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
+                        }
+                        "m_iPlayerClass" => {}
+                        "m_iPlayerLevel" => {}
+                        "m_bAlive" => {}
+                        "m_flNextRespawnTime" => {}
+                        "m_iActiveDominations" => {}
+                        "m_iDamageAssist" => {}
+                        "m_iPing" => {}
+                        "m_iChargeLevel" => {}
+                        "m_iStreaks" => {}
+                        "m_iHealth" => {}
+                        "m_iMaxHealth" => {}
+                        "m_iMaxBuffedHealth" => {}
+                        "m_iPlayerClassWhenKilled" => {}
+                        "m_bValid" => {}
+                        "m_iUserID" => {}
+                        "m_iConnectionState" => {}
+                        "m_flConnectTime" => {}
+                        "m_iDamageBoss" => {}
+                        "m_bArenaSpectator" => {}
+                        "m_iHealingAssist" => {}
+                        "m_iBuybackCredits" => {}
+                        "m_iUpgradeRefundCredits" => {}
+                        "m_iCurrencyCollected" => {}
+                        "m_iDamageBlocked" => {}
+                        "m_iAccountID" => {}
+                        "m_bConnected" => {}
+                        x => {
+                            error!("Unhandled player resource type: {x}");
                         }
                     }
                 }
@@ -1523,8 +1523,7 @@ impl<'a> MatchAnalyzer<'a> {
                     user: self
                         .user_entities
                         .get(&msg.client)
-                        .and_then(|uid| self.user_id_to_steam_id.get(uid))
-                        .map(|s| s.clone())
+                        .and_then(|uid| self.user_id_to_steam_id.get(uid).cloned())
                         .unwrap_or("".to_string()),
                     message: msg.text.to_string(),
                     is_dead: matches!(
@@ -1647,22 +1646,22 @@ impl MessageHandler for MatchAnalyzer<'_> {
                                     raw_dmg_type = x as u32;
                                 }
                                 (EFFECT_ORIGIN_X, &SendPropValue::Float(x)) => {
-                                    origin.x = x as f32;
+                                    origin.x = x;
                                 }
                                 (EFFECT_ORIGIN_Y, &SendPropValue::Float(y)) => {
-                                    origin.y = y as f32;
+                                    origin.y = y;
                                 }
                                 (EFFECT_ORIGIN_Z, &SendPropValue::Float(z)) => {
-                                    origin.z = z as f32;
+                                    origin.z = z;
                                 }
                                 (EFFECT_START_X, &SendPropValue::Float(x)) => {
-                                    start.x = x as f32;
+                                    start.x = x;
                                 }
                                 (EFFECT_START_Y, &SendPropValue::Float(y)) => {
-                                    start.y = y as f32;
+                                    start.y = y;
                                 }
                                 (EFFECT_START_Z, &SendPropValue::Float(z)) => {
-                                    start.z = z as f32;
+                                    start.z = z;
                                 }
                                 _ => {}
                             }

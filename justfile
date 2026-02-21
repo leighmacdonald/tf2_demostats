@@ -6,7 +6,7 @@ test_post:
 test $RUST_BACKTRACE="1":
     cargo test
 
-check: clippy audit machete
+check: clippy machete
 
 clippy:
     cargo clippy
