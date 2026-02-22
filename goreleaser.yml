@@ -11,7 +11,7 @@ builds:
     command: build
     targets:
       - x86_64-unknown-linux-gnu
-      - x86_64-pc-windows-gnu
+      # - x86_64-pc-windows-gnu
     flags:
       - --release
       - --package=tf2_demostats_cli
