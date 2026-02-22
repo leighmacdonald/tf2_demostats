@@ -3,7 +3,7 @@ members = ["tf2_demostats", "tf2_demostats_cli", "tf2_demostats_http"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.8"
+version = "0.1.9"
 description = "Demo parser for Team Fortress 2"
 readme = "README.md"
 license = "MIT"

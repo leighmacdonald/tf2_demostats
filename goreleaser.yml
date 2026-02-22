@@ -1,13 +1,14 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 version: 2
+project_name: tf2_demostats
 
 before:
   hooks:
     - rustup default nightly
-    #- cargo search cargo-zigbuild
 
 builds:
-  - builder: rust
+  - id: cli
+    builder: rust
     command: build
     targets:
       - x86_64-unknown-linux-gnu
@@ -15,6 +16,32 @@ builds:
     flags:
       - --release
       - --package=tf2_demostats_cli
+dockers_v2:
+  - ids: ["cli"]
+    tags:
+      - "latest"
+      - "v{{ .Version }}"
+    labels:
+      "org.opencontainers.image.created": "{{.Date}}"
+      "org.opencontainers.image.title": "{{.ProjectName}}"
+      "org.opencontainers.image.revision": "{{.FullCommit}}"
+      "org.opencontainers.image.version": "{{.Version}}"
+    # extra_files:
+    #   - schema.json
+    platforms:
+      - linux/amd64
+    images:
+      - ghcr.io/leighmacdonald/tf2_demostats
+
+nfpms:
+  - maintainer: Leigh MacDonald <leigh.macdonald@gmail.com>
+    description: TF2 Demo Parser
+    homepage: https://github.com/leighmacdonald/tf2_demostats
+    license: MIT
+    formats:
+      - deb
+      - rpm
+      - apk
 
 archives:
   - formats: ["binary"]
@@ -30,13 +57,11 @@ archives:
     format_overrides:
       - goos: windows
         formats: ["binary"]
+checksum:
+  name_template: "checksums.txt"
 
 changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
+  use: github-native
 
 release:
   github:
