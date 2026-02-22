@@ -1,12 +1,16 @@
-FROM rust:1 AS builder
+FROM rust:latest AS builder
 WORKDIR /usr/src/app
-COPY . .
-RUN cargo install --path .
+COPY Cargo.toml .
+COPY tf2_demostats_http tf2_demostats_http
+COPY tf2_demostats_cli tf2_demostats_cli
+COPY tf2_demostats tf2_demostats
+RUN cargo build --release
 
 FROM debian:bookworm
-RUN apt update && apt install dumb-init
 WORKDIR /app
-COPY --from=builder /usr/src/app/target/release/demostats /app/demostats
+COPY --from=builder /usr/src/app/target/release/tf2_demostats /app/tf2_demostats
+COPY schema.json .
 EXPOSE 8811
 
-CMD ["./demostats"]
+ENTRYPOINT [ "./tf2_demostats"]
+CMD [ "serve" ]
