@@ -32,6 +32,9 @@ dockers_v2:
       - linux/amd64
     images:
       - ghcr.io/leighmacdonald/tf2_demostats
+    # sbom: false
+    # flags:
+    #   - "--provenance=false"
 
 nfpms:
   - maintainer: Leigh MacDonald <leigh.macdonald@gmail.com>
