@@ -5,14 +5,14 @@ project_name: tf2_demostats
 before:
   hooks:
     - rustup default nightly
-    - rustup target add x86_64-unknown-linux-musl
+    - rustup target install x86_64-unknown-linux-musl
 
 builds:
   - id: cli
     builder: rust
     command: build
     targets:
-      - x86_64-unknown-linux-musl
+      - x86_64-unknown-linux-gnu
       # - x86_64-pc-windows-gnu
     flags:
       - --release
