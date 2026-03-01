@@ -19,6 +19,9 @@ jobs:
     steps:
       - uses: mlugg/setup-zig@v2
 
+      - name: musl tools
+        run: sudo apt install build-essential musl-tools
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
