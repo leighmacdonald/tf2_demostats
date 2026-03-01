@@ -1,7 +1,7 @@
 FROM scratch
+ARG TARGETPLATFORM
 WORKDIR /app
-COPY . .
+COPY ${TARGETPLATFORM}/tf2_demostats .
 EXPOSE 8811
-
-ENTRYPOINT [ "./tf2_demostats"]
+ENTRYPOINT ["/app/tf2_demostats"]
 CMD [ "serve" ]

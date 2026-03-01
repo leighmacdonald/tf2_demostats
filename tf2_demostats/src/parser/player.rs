@@ -1,11 +1,11 @@
 use crate::{
+    Vec3,
     parser::{
         game::{DamageType, Death, RoundState},
         is_false, is_zero,
         stats::Stats,
     },
     schema::{Attribute, Item},
-    Vec3,
 };
 use enumset::EnumSet;
 use serde::{Deserialize, Serialize};
