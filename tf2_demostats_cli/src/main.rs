@@ -41,7 +41,7 @@ enum Commands {
         #[arg(required=true, value_hint = ValueHint::FilePath, num_args = 1..)]
         demo: Vec<PathBuf>,
     },
-    #[command(about = "Update the local schema schema cache")]
+    #[command(about = "Update the local schema cache")]
     Update {
         #[arg(short, long, default_value = DEFAULT_SCHEMA)]
         schema: PathBuf,
