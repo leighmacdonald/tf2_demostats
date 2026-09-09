@@ -13,6 +13,7 @@ pkgs.mkShell {
   buildInputs = with pkgs; [
     pkg-config
     openssl
+    opus # voice decoding (steam-audio-codec links system libopus when found)
     cmake
     zlib
     libgit2
@@ -28,4 +29,9 @@ pkgs.mkShell {
     cargo-machete
     rustup
   ];
+  # Dynamically linked system libs (e.g. opus) must be findable at runtime
+  # for locally built binaries run via `cargo run` / `cargo test`.
+  shellHook = ''
+    export LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath [ pkgs.opus ]}:$LD_LIBRARY_PATH
+  '';
 }

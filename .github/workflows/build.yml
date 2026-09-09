@@ -18,6 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libopus-dev pkg-config
+
       - name: Build binaries in "${{ matrix.BUILD_TARGET }}" mode
         run: cargo build --profile ${{ matrix.BUILD_TARGET }} --verbose
 
