@@ -10,12 +10,32 @@ Demo parser for Team Fortress 2. Parse `.dem` files to JSON, extract voice audio
 
 ## Prerequisites
 
-- Rust (stable; see `rustup` / `shell.nix` for a nix dev shell)
+- Rust (stable; see `rustup`, or the nix dev shell below)
 - libopus: used by voice decoding. If the build picks up a system libopus via `pkg-config` it links dynamically; otherwise it compiles the bundled copy with `cmake`. With CMake ≥ 4 the bundled build needs:
   ```sh
   CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo build
   ```
 - A transcription server is only needed for `--transcribe` (see below) — everything else works offline.
+
+## Nix (flake)
+
+This repo is a nix flake: it provides an installable package and a dev shell
+(requires nix with the `flakes` experimental feature; `direnv` picks it up
+automatically via `.envrc`).
+
+```sh
+nix build .                  # installable package -> ./result/bin/tf2_demostats
+nix run . -- voice match.dem # run directly without installing
+nix develop                  # dev shell: rust toolchain, cargo helpers, system libs
+nix flake check              # build package + validate dev shell
+```
+
+Notes:
+
+- `Cargo.lock` is intentionally committed: the nix package build needs it
+  (`cargoLock.lockFile`), and it pins reproducible builds for the binary.
+- The package links the nixpkgs system `libopus`; no CMake workaround needed.
+- Supported systems: `x86_64-linux`, `aarch64-linux`.
 
 ## Build
 
