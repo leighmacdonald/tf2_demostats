@@ -26,3 +26,8 @@ tf-demo-parser = "0.6.4"
 steam-audio-codec = "0.1"
 ogg = "0.9"
 opus = "0.3"
+reqwest = { version = "0.12", features = [
+    "json",
+    "multipart",
+    "rustls-tls-webpki-roots",
+] }
