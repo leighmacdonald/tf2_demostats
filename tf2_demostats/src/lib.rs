@@ -4,6 +4,7 @@ extern crate core;
 
 pub mod parser;
 pub mod schema;
+pub mod transcribe;
 pub mod voice;
 
 pub type Result<T> = core::result::Result<T, Error>;

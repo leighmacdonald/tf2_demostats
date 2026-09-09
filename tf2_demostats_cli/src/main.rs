@@ -9,6 +9,7 @@ use std::{
 use tf2_demostats::{
     Result, parser,
     schema::{self, download_schema},
+    transcribe::{TranscribeConfig, Transcriber},
     voice,
 };
 use tracing::{error, info};
@@ -55,6 +56,24 @@ enum Commands {
 
         #[arg(long, help = "Only write the downmixed file")]
         only_mix: bool,
+
+        #[arg(
+            long,
+            help = "Transcribe each speaker's opus via an OpenAI-compatible server (e.g. speaches)"
+        )]
+        transcribe: bool,
+
+        #[arg(long, default_value = tf2_demostats::transcribe::DEFAULT_BASE_URL, env = "TRANSCRIBE_URL", help = "Transcription server base URL")]
+        transcription_url: String,
+
+        #[arg(long, default_value = tf2_demostats::transcribe::DEFAULT_MODEL, env = "TRANSCRIBE_MODEL", help = "Transcription model ID on the server")]
+        transcription_model: String,
+
+        #[arg(long, env = "TRANSCRIBE_API_KEY", help = "Bearer token for the transcription server (if required)")]
+        transcription_api_key: Option<String>,
+
+        #[arg(long, default_value = "en", help = "Transcription language (empty = auto-detect)")]
+        language: String,
     },
     #[command(about = "Update the local schema cache")]
     Update {
@@ -119,7 +138,27 @@ async fn exec() -> Result<()> {
             out_dir,
             no_mix,
             only_mix,
-        } => cmd_voice(demo, out_dir, no_mix, only_mix).await,
+            transcribe,
+            transcription_url,
+            transcription_model,
+            transcription_api_key,
+            language,
+        } => {
+            cmd_voice(
+                demo,
+                out_dir,
+                no_mix,
+                only_mix,
+                TranscribeOptions {
+                    enabled: transcribe,
+                    url: transcription_url,
+                    model: transcription_model,
+                    api_key: transcription_api_key,
+                    language,
+                },
+            )
+            .await
+        }
         Commands::Update {
             schema,
             api_key: key,
@@ -160,11 +199,34 @@ async fn cmd_parse(schema_path: &Path, demo_paths: Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
+/// Transcription flags for the `voice` command, passed through to an
+/// OpenAI-compatible speech-to-text server.
+#[derive(Debug, Clone)]
+struct TranscribeOptions {
+    enabled: bool,
+    url: String,
+    model: String,
+    api_key: Option<String>,
+    language: String,
+}
+
+impl From<&TranscribeOptions> for TranscribeConfig {
+    fn from(options: &TranscribeOptions) -> Self {
+        Self {
+            base_url: options.url.clone(),
+            model: options.model.clone(),
+            api_key: options.api_key.clone(),
+            language: options.language.clone(),
+            ..Self::default()
+        }
+    }
+}
 async fn cmd_voice(
     demo_paths: Vec<PathBuf>,
     out_dir: Option<PathBuf>,
     no_mix: bool,
     only_mix: bool,
+    transcribe: TranscribeOptions,
 ) -> Result<()> {
     for demo_path in demo_paths {
         let bytes = tokio::fs::read(&demo_path).await?;
@@ -212,12 +274,97 @@ async fn cmd_voice(
             output.captured_packets,
             output.skipped_packets
         );
-        for path in written {
+        for path in &written {
             info!("  {}", path.display());
+        }
+
+        if transcribe.enabled {
+            if only_mix {
+                info!("Skipping transcription: --only-mix has no per-speaker audio");
+            } else {
+                let transcript_path = cmd_transcribe(
+                    &output,
+                    &written,
+                    &dir,
+                    stem,
+                    &demo_path,
+                    TranscribeConfig::from(&transcribe),
+                )
+                .await?;
+                info!("  {}", transcript_path.display());
+            }
         }
     }
 
     Ok(())
+}
+
+/// Transcribe each per-player opus file and write `{stem}_transcript.json`.
+/// Returns the transcript path.
+async fn cmd_transcribe(
+    output: &voice::OpusOutput,
+    written: &[PathBuf],
+    dir: &Path,
+    stem: &str,
+    demo_path: &Path,
+    config: TranscribeConfig,
+) -> Result<PathBuf> {
+    let transcriber = Transcriber::new(config.clone())?;
+    let mut ids: Vec<u64> = output.players.keys().copied().collect();
+    ids.sort_unstable();
+    let mut speakers = serde_json::Map::new();
+    for id in ids {
+        let player = &output.players[&id];
+        let opus_path = written
+            .iter()
+            .find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n == format!("{stem}_{id}.opus"))
+            })
+            .cloned()
+            .unwrap_or_else(|| dir.join(format!("{stem}_{id}.opus")));
+        let transcription = transcriber.transcribe_file(&opus_path).await?;
+        info!(
+            "Transcribed {} ({} segments)",
+            opus_path.display(),
+            transcription.segments.len()
+        );
+        let segments: Vec<serde_json::Value> = transcription
+            .segments
+            .iter()
+            .map(|s| {
+                serde_json::json!({"id": s.id, "start": s.start, "end": s.end, "text": s.text.trim()})
+            })
+            .collect();
+        speakers.insert(
+            id.to_string(),
+            serde_json::json!({
+                "file": opus_path.file_name().map(|n| n.to_string_lossy()),
+                "offset_seconds": player.offset_seconds,
+                "offset_tick": player.offset_tick,
+                "language": transcription.language,
+                "segments": segments,
+            }),
+        );
+    }
+    let transcript = serde_json::json!({
+        "demo": demo_path.file_name().map(|n| n.to_string_lossy()),
+        "server": config.base_url,
+        "model": config.model,
+        "speakers": speakers,
+    });
+    let transcript_path = dir.join(format!("{stem}_transcript.json"));
+    std::fs::write(
+        &transcript_path,
+        serde_json::to_string_pretty(&transcript)? + "\n",
+    )?;
+    info!(
+        "Wrote transcript for {} ({} speakers)",
+        demo_path.display(),
+        speakers.len()
+    );
+    Ok(transcript_path)
 }
 
 async fn cmd_version() -> Result<()> {

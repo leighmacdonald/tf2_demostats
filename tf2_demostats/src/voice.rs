@@ -7,12 +7,12 @@ use std::{
 use ogg::writing::{PacketWriteEndInfo, PacketWriter};
 use steam_audio_codec::{SteamVoiceData, SteamVoiceDecoder};
 use tf_demo_parser::{
-    Demo, DemoParser, MessageType, ParserState,
     demo::{
         data::DemoTick,
-        message::{Message, voice::VoiceInitMessage},
+        message::{voice::VoiceInitMessage, Message},
         parser::MessageHandler,
     },
+    Demo, DemoParser, MessageType, ParserState,
 };
 use tracing::warn;
 
@@ -69,6 +69,13 @@ pub struct PlayerOpus {
     pub sample_rate: u32,
     /// Frames in capture order (compact: no padding between transmissions).
     pub frames: Vec<OpusFrame>,
+    /// Start of this player's stream on the demo timeline in seconds, i.e.
+    /// the first chunk's tick relative to the global voice anchor. Add to
+    /// per-file timestamps (e.g. transcripts) to map them onto demo time.
+    pub offset_seconds: f64,
+    /// Demo tick that [`PlayerOpus::offset_seconds`] corresponds to, i.e.
+    /// the tick of this player's first chunk.
+    pub offset_tick: u32,
 }
 
 /// Opus voice data extracted from a demo without decoding.
@@ -499,6 +506,13 @@ impl VoiceOutput {
     }
 }
 
+/// Demo-timeline offset in seconds of a tick relative to the capture's
+/// global voice anchor.
+fn player_offset_seconds(capture: &VoiceCapture, tick: u32) -> f64 {
+    let anchor = capture.anchor_tick.unwrap_or(tick);
+    f64::from(tick.saturating_sub(anchor)) * capture.interval_per_tick
+}
+
 impl OpusOutput {
     /// Repackage captured chunks into per-player Opus frame streams.
     pub fn from_capture(capture: &VoiceCapture) -> Self {
@@ -538,8 +552,10 @@ impl OpusOutput {
                     match parse_plc_frames(opus.as_slice()) {
                         Ok(frames) => {
                             let player = output.players.entry(chunk.steam_id).or_default();
-                            if player.sample_rate == 0 {
+                            if player.frames.is_empty() {
                                 player.sample_rate = chunk.sample_rate;
+                                player.offset_seconds = player_offset_seconds(capture, chunk.tick);
+                                player.offset_tick = chunk.tick;
                             }
                             player
                                 .frames
@@ -850,6 +866,41 @@ mod tests {
         granules.dedup();
         assert!(granules.windows(2).all(|w| w[0] < w[1]));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn player_offsets_track_first_chunk_tick() {
+        let frame = opus_silence_frame();
+        let mut packets = rate_packet(24_000);
+        packets.extend_from_slice(&plc_packet(&plc_entry(&frame, 0)));
+        let packets = packets;
+        let capture = VoiceCapture {
+            codec: Some("steam".into()),
+            interval_per_tick: 0.015,
+            anchor_tick: Some(1000),
+            sample_rate: 24_000,
+            chunks: vec![
+                RawChunk {
+                    tick: 1000,
+                    steam_id: 1,
+                    sample_rate: 24_000,
+                    data: steam_chunk(1, &packets),
+                },
+                RawChunk {
+                    tick: 1067,
+                    steam_id: 2,
+                    sample_rate: 24_000,
+                    data: steam_chunk(2, &packets),
+                },
+            ],
+            captured_packets: 2,
+            skipped_packets: 0,
+        };
+        let output = OpusOutput::from_capture(&capture);
+        assert!((output.players[&1].offset_seconds - 0.0).abs() < 1e-9);
+        assert_eq!(output.players[&1].offset_tick, 1000);
+        assert!((output.players[&2].offset_seconds - 67.0 * 0.015).abs() < 1e-9);
+        assert_eq!(output.players[&2].offset_tick, 1067);
     }
 
     #[test]
