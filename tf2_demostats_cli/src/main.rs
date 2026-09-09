@@ -9,6 +9,7 @@ use std::{
 use tf2_demostats::{
     Result, parser,
     schema::{self, download_schema},
+    voice,
 };
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
@@ -40,6 +41,20 @@ enum Commands {
 
         #[arg(required=true, value_hint = ValueHint::FilePath, num_args = 1..)]
         demo: Vec<PathBuf>,
+    },
+    #[command(about = "Extract voice audio to opus files")]
+    Voice {
+        #[arg(required=true, value_hint = ValueHint::FilePath, num_args = 1..)]
+        demo: Vec<PathBuf>,
+
+        #[arg(short, long, help = "Output directory (default: alongside each demo)")]
+        out_dir: Option<PathBuf>,
+
+        #[arg(long, help = "Skip writing the downmixed file")]
+        no_mix: bool,
+
+        #[arg(long, help = "Only write the downmixed file")]
+        only_mix: bool,
     },
     #[command(about = "Update the local schema cache")]
     Update {
@@ -99,6 +114,12 @@ async fn exec() -> Result<()> {
     match args.command {
         Commands::Version => cmd_version().await,
         Commands::Parse { schema, demo } => cmd_parse(&schema, demo).await,
+        Commands::Voice {
+            demo,
+            out_dir,
+            no_mix,
+            only_mix,
+        } => cmd_voice(demo, out_dir, no_mix, only_mix).await,
         Commands::Update {
             schema,
             api_key: key,
@@ -134,6 +155,66 @@ async fn cmd_parse(schema_path: &Path, demo_paths: Vec<PathBuf>) -> Result<()> {
         demo_path.add_extension("json");
         let mut out_file = File::create(demo_path)?;
         serde_json::to_writer(&mut out_file, &demo)?;
+    }
+
+    Ok(())
+}
+
+async fn cmd_voice(
+    demo_paths: Vec<PathBuf>,
+    out_dir: Option<PathBuf>,
+    no_mix: bool,
+    only_mix: bool,
+) -> Result<()> {
+    for demo_path in demo_paths {
+        let bytes = tokio::fs::read(&demo_path).await?;
+        let capture = voice::capture_voice(&bytes)?;
+
+        let dir = match &out_dir {
+            Some(dir) => dir.clone(),
+            None => demo_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from(".")),
+        };
+        let stem = demo_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("demo");
+        let output = voice::OpusOutput::from_capture(&capture);
+        if output.players.is_empty() {
+            info!(
+                "No steam voice audio in {} (codec: {:?}, captured: {}, skipped: {})",
+                demo_path.display(),
+                output.codec,
+                output.captured_packets,
+                output.skipped_packets
+            );
+            continue;
+        }
+        // Mixing requires PCM: decode once from the same capture.
+        let mixed = if !no_mix {
+            let pcm = voice::VoiceOutput::from_capture(&capture);
+            Some((voice::downmix(&pcm), pcm.sample_rate))
+        } else {
+            None
+        };
+        let mixed_ref = mixed.as_ref().map(|(s, r)| (s.as_slice(), *r));
+        let written =
+            voice::write_opus_files(&output, mixed_ref, &dir, stem, !only_mix, !no_mix)?;
+        let frames: usize = output.players.values().map(|p| p.frames.len()).sum();
+        info!(
+            "Wrote {} opus file(s) for {} ({} speakers, {} frames, {} chunks, {} skipped)",
+            written.len(),
+            demo_path.display(),
+            output.players.len(),
+            frames,
+            output.captured_packets,
+            output.skipped_packets
+        );
+        for path in written {
+            info!("  {}", path.display());
+        }
     }
 
     Ok(())
