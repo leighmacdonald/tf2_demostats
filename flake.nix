@@ -72,6 +72,12 @@
             inputsFrom = [ self.packages.${system}.tf2_demostats ];
             hardeningDisable = [ "fortify" ];
             buildInputs = with pkgs; [
+              # Rust toolchain (nix-provided, no rustup required on the host).
+              # Matches the compiler used for the packaged build below.
+              cargo
+              rustc
+              rustfmt
+              clippy
               rust-analyzer
               cargo-audit
               cargo-machete

@@ -3092,7 +3092,7 @@ dependencies = [
 
 [[package]]
 name = "tf2_demostats"
-version = "0.1.9"
+version = "0.2.0"
 dependencies = [
  "alga",
  "awc",
@@ -3118,7 +3118,7 @@ dependencies = [
 
 [[package]]
 name = "tf2_demostats_cli"
-version = "0.1.9"
+version = "0.2.0"
 dependencies = [
  "actix-web",
  "clap",
@@ -3134,7 +3134,7 @@ dependencies = [
 
 [[package]]
 name = "tf2_demostats_http"
-version = "0.1.9"
+version = "0.2.0"
 dependencies = [
  "actix-multipart",
  "actix-web",
