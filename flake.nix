@@ -3,10 +3,18 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    fenix = {
+      url = "github:nix-community/fenix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      nixpkgs,
+      fenix,
+      ...
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -68,32 +76,86 @@
 
       devShells = forSystem (
         pkgs: system: {
-          default = pkgs.mkShell {
-            inputsFrom = [ self.packages.${system}.tf2_demostats ];
-            hardeningDisable = [ "fortify" ];
-            buildInputs = with pkgs; [
-              # Rust toolchain (nix-provided, no rustup required on the host).
-              # Matches the compiler used for the packaged build below.
-              cargo
-              rustc
-              rustfmt
-              clippy
-              rust-analyzer
-              cargo-audit
-              cargo-machete
-              goreleaser
-              zig # required by goreleaser
-              just
-              just-lsp
-              nil
-              nixd
-            ];
-            # Dynamically linked system libs (e.g. opus) must be findable at
-            # runtime for locally built binaries run via `cargo run` / `cargo test`.
-            shellHook = ''
-              export LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath [ pkgs.opus ]}:$LD_LIBRARY_PATH
-            '';
-          };
+          default =
+            let
+              # Hermetic Rust toolchain (no rustup required), including the
+              # target stds used for release builds (`windows-gnu`; gnu is
+              # the host target and always included, listed for clarity).
+              toolchain =
+                with fenix.packages.${system};
+                combine [
+                  (stable.withComponents [
+                    "cargo"
+                    "clippy"
+                    "rustc"
+                    "rustfmt"
+                  ])
+                  targets.x86_64-unknown-linux-gnu.stable.rust-std
+                  targets.x86_64-pc-windows-gnu.stable.rust-std
+                ];
+              # Only the static thread archives, symlinked into one dir.
+              # (The packages also ship .dll.a import libs, which must NOT be
+              # visible, or the exe would gain DLL dependencies at runtime.)
+              mingw-thread-libs = pkgs.runCommand "mingw-thread-libs" { } ''
+                mkdir -p $out/lib
+                ln -s ${pkgs.pkgsCross.mingwW64.windows.mcfgthreads}/lib/libmcfgthread.a $out/lib/
+                ln -s ${pkgs.pkgsCross.mingwW64.windows.pthreads}/lib/libpthread.a $out/lib/
+              '';
+              # `x86_64-w64-mingw32-gcc` wrapper: drops any cargo-style
+              # `--target=` flag the `cc` crate may append and adds the
+              # thread-lib search path.
+              mingw-cc-wrapper = pkgs.writeShellScriptBin "x86_64-w64-mingw32-gcc" ''
+                args=()
+                for a in "$@"; do
+                  case "$a" in
+                    --target=*) ;;
+                    *) args+=("$a") ;;
+                  esac
+                done
+                exec ${pkgs.pkgsCross.mingwW64.buildPackages.gcc}/bin/x86_64-w64-mingw32-gcc \
+                  -L${mingw-thread-libs}/lib "''${args[@]}"
+              '';
+            in
+            pkgs.mkShell {
+              hardeningDisable = [ "fortify" ];
+              buildInputs = [
+                toolchain
+                # MinGW cross toolchain for Windows (`windows-gnu`) builds,
+                # e.g. `goreleaser release --snapshot`. The compiler wrapper
+                # must precede binutils on PATH so it (not the raw compiler)
+                # is picked up; the thread libs it references stay out of
+                # LIBRARY_PATH so no Windows objects can leak into native
+                # links.
+                mingw-cc-wrapper
+                pkgs.pkgsCross.mingwW64.buildPackages.binutils
+                # C build deps for `cargo build` (these also feed the
+                # `nix build` package via the same inputs).
+                pkgs.pkg-config
+                pkgs.cmake
+                pkgs.openssl
+                pkgs.opus
+              ]
+              ++ (with pkgs; [
+                rust-analyzer
+                cargo-audit
+                cargo-machete
+                goreleaser
+                just
+                just-lsp
+                nil
+                nixd
+              ]);
+              # MinGW cross toolchain selection for the Windows target
+              # (used by cargo, the `cc` crate, and cmake alike).
+              CC_x86_64_pc_windows_gnu = "x86_64-w64-mingw32-gcc";
+              CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "x86_64-w64-mingw32-gcc";
+              AR_x86_64_pc_windows_gnu = "x86_64-w64-mingw32-ar";
+              # Dynamically linked system libs (e.g. opus) must be findable at
+              # runtime for locally built binaries run via `cargo run` / `cargo test`.
+              shellHook = ''
+                export LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath [ pkgs.opus ]}:$LD_LIBRARY_PATH
+              '';
+            };
         }
       );
     };
