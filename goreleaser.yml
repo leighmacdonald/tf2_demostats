@@ -2,23 +2,55 @@
 version: 2
 project_name: tf2_demostats
 
+# Release builds target standard gnu Linux and Windows (MinGW) with the
+# stock Rust toolchain (see release.yml). No nix, musl, or zig setup is
+# involved.
 before:
   hooks:
-    - rustup default nightly
-    - rustup target install x86_64-unknown-linux-musl
-
+    # audiopus-sys does not declare OPUS_* in rerun-if-env-changed, so a
+    # plain dev build followed by a release build (or vice versa) would
+    # reuse a stale voice-codec link decision. Force it to re-resolve for
+    # both release targets (a plain `cargo clean -p` would miss the
+    # explicit-target dirs).
+    - cargo clean -p audiopus_sys --target x86_64-unknown-linux-gnu --target x86_64-pc-windows-gnu
 builds:
-  - id: cli
+  - id: cli-linux
     builder: rust
     command: build
     targets:
-      - x86_64-unknown-linux-musl
-      # - x86_64-pc-windows-gnu
+      - x86_64-unknown-linux-gnu
     flags:
       - --release
       - --package=tf2_demostats_cli
+    env:
+      # Static-link the vendored-or-system libopus so release artifacts
+      # carry no libopus runtime dependency.
+      - OPUS_STATIC=1
+      # The vendored-opus cmake fallback needs this with CMake >= 4;
+      # harmless on older CMake.
+      - CMAKE_POLICY_VERSION_MINIMUM=3.5
+  - id: cli-windows
+    builder: rust
+    command: build
+    targets:
+      - x86_64-pc-windows-gnu
+    flags:
+      - --release
+      - --package=tf2_demostats_cli
+    env:
+      # MinGW cross toolchain for the Windows target (mingw-w64 package).
+      - CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
+      - CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc
+      - AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar
+      # Bypass the system libopus pkg-config probe (gnu objects would poison
+      # the windows link) and statically link the cmake-vendored copy instead.
+      - OPUS_NO_PKG=1
+      - OPUS_STATIC=1
+      # The vendored-opus cmake fallback needs this with CMake >= 4;
+      # harmless on older CMake.
+      - CMAKE_POLICY_VERSION_MINIMUM=3.5
 dockers_v2:
-  - ids: ["cli"]
+  - ids: ["cli-linux"]
     tags:
       - "latest"
       - "v{{ .Version }}"

@@ -152,7 +152,24 @@ let result = tx.transcribe_file(Path::new("speaker.opus")).await?;
 
 ```sh
 just check    # clippy + machete + tests
-just test    # unit tests (transcription tests use fixtures; live-server e2e is manual)
+just test     # unit tests (transcription tests use fixtures; live-server e2e is manual)
+```
+
+## Releases
+
+Tagged `vX.Y.Z` pushes run GoReleaser via the release workflow with the stock
+Rust toolchain: standard gnu Linux (`x86_64-unknown-linux-gnu`) plus Windows
+(`x86_64-pc-windows-gnu`, via the MinGW toolchain installed in CI).
+Release artifacts: platform binaries, deb/rpm/apk (Linux), and a
+Debian-based Docker image (the Linux binary dynamically links glibc, so the
+image needs a matching distro userland — kept in sync with the release
+runner). To reproduce a release locally (snapshot, no publish), run it inside
+the nix dev shell, which provides the MinGW cross toolchain (plain
+`goreleaser` outside it fails on the Windows target with a missing linker):
+
+```sh
+nix develop --command -- goreleaser release --snapshot --clean
+# or (with direnv active): just snapshot
 ```
 
 ## License
