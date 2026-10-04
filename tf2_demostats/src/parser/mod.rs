@@ -1,8 +1,8 @@
 mod entity;
 mod game;
-mod player;
+pub mod player;
 mod props;
-mod stats;
+pub mod stats;
 pub mod summarizer;
 mod weapon;
 

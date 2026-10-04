@@ -62,17 +62,17 @@ pub struct DemoSummary {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ChatMessage {
-    tick: DemoTick,
-    user: String, // steamid
-    message: String,
+    pub tick: DemoTick,
+    pub user: String, // steamid
+    pub message: String,
     #[serde(skip_serializing_if = "is_false")]
-    is_dead: bool,
+    pub is_dead: bool,
     #[serde(skip_serializing_if = "is_false")]
-    is_team: bool,
+    pub is_team: bool,
     #[serde(skip_serializing_if = "is_false")]
-    is_spec: bool,
+    pub is_spec: bool,
     #[serde(skip_serializing_if = "is_false")]
-    is_name_change: bool,
+    pub is_name_change: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]

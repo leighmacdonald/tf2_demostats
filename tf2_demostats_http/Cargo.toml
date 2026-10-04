@@ -6,8 +6,29 @@ authors.workspace = true
 description.workspace = true
 license.workspace = true
 
+[features]
+# Enable generated client stubs (`DemoServiceClient`) + client transports.
+client = ["connectrpc/client"]
+
 [dependencies]
-actix-web = "4.13.0"
-actix-multipart = "0.7.2"
+axum = "0.8"
+buffa = { version = "0.9", features = ["json"] }
+connectrpc = { version = "0.9", features = ["axum"] }
+serde = { version = "1.0", features = ["derive"] }
+tf-demo-parser = "0.6.4"
+tokio = { version = "1.49", features = ["net", "rt"] }
 tracing = { version = "0.1.44", features = ["release_max_level_info"] }
 tf2_demostats = { path = "../tf2_demostats" }
+
+[build-dependencies]
+connectrpc-build = "0.9"
+
+# `serde` is only referenced by generated code in OUT_DIR (see `build.rs`),
+# which cargo-machete does not scan.
+[package.metadata.cargo-machete]
+ignored = ["connectrpc-build", "serde"]
+
+[dev-dependencies]
+http = "1.0"
+serde_json = "1.0"
+tokio = { version = "1.49", features = ["fs", "macros", "rt-multi-thread"] }

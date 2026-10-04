@@ -88,7 +88,7 @@ enum Commands {
         )]
         api_key: String,
     },
-    #[command(about = "Start HTTP server")]
+    #[command(about = "Start ConnectRPC server")]
     Serve {
         #[arg(short, long, default_value = DEFAULT_SCHEMA)]
         schema: PathBuf,
@@ -101,7 +101,7 @@ enum Commands {
     },
 }
 
-#[actix_web::main]
+#[tokio::main]
 async fn main() -> ExitCode {
     dotenv().ok();
 

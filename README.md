@@ -6,7 +6,7 @@ Demo parser for Team Fortress 2. Parse `.dem` files to JSON, extract voice audio
 
 - `tf2_demostats` — library: demo parsing (`parser`), voice extraction (`voice`), server-based transcription (`transcribe`), schema handling (`schema`)
 - `tf2_demostats_cli` — the `tf2_demostats` binary (parse, voice, transcribe, serve, update)
-- `tf2_demostats_http` — HTTP front end for demo parsing
+- `tf2_demostats_http` — ConnectRPC front end for demo parsing
 
 ## Prerequisites
 
@@ -117,13 +117,25 @@ Each speaker's `.opus` is POSTed to `{url}/v1/audio/transcriptions` (`response_f
 
 `--only-mix --transcribe` skips transcription with a warning (a mix has no speaker identity). If the server is unreachable the command fails with a clear error but keeps the extracted `.opus` files.
 
-### Serve over HTTP
+### Serve over ConnectRPC
 
 ```sh
 tf2_demostats serve [--schema schema.json] [--host 0.0.0.0] [--port 8811]
 ```
 
-`POST /` a demo as multipart `file=@match.dem` to get the parsed JSON back; `GET /` shows an upload form.
+Serves `demostats.v1.DemoService/ParseDemo` over Connect, gRPC, and gRPC-Web
+(see `proto/demostats/v1/demostats.proto`). `POST` a JSON request with the
+demo bytes base64-encoded:
+
+```sh
+demo_b64=$(base64 -w0 match.dem)
+curl -X POST http://localhost:8811/demostats.v1.DemoService/ParseDemo \
+  -H 'content-type: application/json' \
+  -d "{\"demo\":\"$demo_b64\",\"filename\":\"match.dem\"}"
+```
+
+The response is the fully typed parse result (header, rounds, players,
+chat). Uploads larger than 1GB are rejected.
 
 ## Library usage
 
