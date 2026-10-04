@@ -32,6 +32,7 @@
           fileset = pkgs.lib.fileset.unions [
             ./Cargo.toml
             ./Cargo.lock
+            ./proto
             ./tf2_demostats
             ./tf2_demostats_cli
             ./tf2_demostats_http
@@ -53,6 +54,7 @@
             nativeBuildInputs = with pkgs; [
               pkg-config
               cmake
+              protobuf
             ];
             buildInputs = with pkgs; [
               openssl
@@ -132,6 +134,7 @@
                 # `nix build` package via the same inputs).
                 pkgs.pkg-config
                 pkgs.cmake
+                pkgs.protobuf
                 pkgs.openssl
                 pkgs.opus
               ]
