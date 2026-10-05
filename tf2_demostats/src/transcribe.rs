@@ -1,4 +1,4 @@
-//! Transcription of extracted voice audio via an OpenAI API-compatible
+//! Transcription of extracted voice audio via an `OpenAI` API-compatible
 //! speech-to-text server (e.g. [speaches](https://speaches.ai/), a
 //! self-hostable server backed by faster-whisper).
 //!
@@ -14,7 +14,7 @@ use serde::Deserialize;
 /// Default server base URL: a self-hosted speaches instance.
 pub const DEFAULT_BASE_URL: &str = "http://localhost:8000/v1";
 
-/// Default model: faster-whisper large-v3 in CTranslate2 format.
+/// Default model: faster-whisper large-v3 in `CTranslate2` format.
 pub const DEFAULT_MODEL: &str = "Systran/faster-whisper-large-v3";
 
 /// Connection settings for the transcription server.
@@ -86,6 +86,10 @@ pub struct Transcriber {
 impl Transcriber {
     /// Build a client from `config`. Fails only on invalid timeout/TLS setup,
     /// not on server reachability (checked per request).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP client cannot be built.
     pub fn new(config: TranscribeConfig) -> crate::Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs.max(1)))
@@ -94,10 +98,12 @@ impl Transcriber {
     }
 
     /// Transcribe one audio file (e.g. a per-player `.opus`).
-    pub async fn transcribe_file(
-        &self,
-        audio_path: &Path,
-    ) -> crate::Result<VerboseTranscription> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read, the request fails, or
+    /// the response cannot be parsed.
+    pub async fn transcribe_file(&self, audio_path: &Path) -> crate::Result<VerboseTranscription> {
         let bytes = std::fs::read(audio_path).map_err(|e| {
             io::Error::new(
                 e.kind(),
@@ -198,7 +204,7 @@ mod tests {
             serde_json::from_str(r#"{"segments": [{"start": 0.0, "end": 1.5}]}"#).unwrap();
         assert_eq!(t.segments.len(), 1);
         assert_eq!(t.segments[0].id, 0);
-        assert!(t.language.is_empty());
+        assert_eq!(t.language, "");
     }
 
     #[test]

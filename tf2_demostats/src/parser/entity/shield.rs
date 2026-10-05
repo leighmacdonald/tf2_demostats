@@ -1,14 +1,14 @@
 use crate::parser::{
     entity::{Entity, EntityClass},
-    props::*,
+    props::{ITEM_DEFINITION, OWNER, SELF_HANDLE},
     summarizer::MatchAnalyzerView,
 };
 use std::any::Any;
 use tf_demo_parser::{
+    ParserState,
     demo::{
         message::packetentities::PacketEntity, packet::datatable::ClassId, sendprop::SendPropValue,
     },
-    ParserState,
 };
 
 #[optfield::optfield(ShieldPatch, merge_fn, attrs)]
@@ -48,8 +48,7 @@ impl Entity for Shield {
         let class_name = parser_state
             .server_classes
             .get(<ClassId as Into<usize>>::into(packet.server_class))
-            .map(|s| s.name.to_string())
-            .unwrap_or("UNKNOWN_PROJECTILE".to_string());
+            .map_or("UNKNOWN_PROJECTILE".to_string(), |s| s.name.to_string());
 
         let mut p = ShieldPatch::default();
         Shield::parse(packet, parser_state, &mut p);

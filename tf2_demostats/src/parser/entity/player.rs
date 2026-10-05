@@ -1,15 +1,22 @@
 use crate::{
+    Vec2, Vec3,
     parser::{
         entity::{Entity, EntityClass},
-        game::{update_condition, Flags, PlayerCondition, INVALID_HANDLE},
-        props::*,
+        game::{Flags, INVALID_HANDLE, PlayerCondition, update_condition},
+        props::{
+            ACTIVE_WEAPON_HANDLE, CLASS, COND_0, COND_1, COND_2, COND_3, COND_BITS, COND_SOURCE,
+            COSMETIC_0, COSMETIC_1, COSMETIC_2, COSMETIC_3, COSMETIC_4, COSMETIC_5, COSMETIC_6,
+            COSMETIC_7, DEATHS, EYE_X, EYE_Y, FLAGS, HANDLE, HEALTH, KILL_ASSISTS, KILLS,
+            NUM_COSMETICS, ORIGIN_XY, ORIGIN_Z, SIM_TIME, TEAM, WEP_0, WEP_1, WEP_2, WEP_3, WEP_4,
+            WEP_5, WEP_6,
+        },
         summarizer::MatchAnalyzerView,
     },
-    Vec2, Vec3,
 };
 use enumset::EnumSet;
 use std::any::Any;
 use tf_demo_parser::{
+    ParserState,
     demo::{
         data::DemoTick,
         message::packetentities::PacketEntity,
@@ -17,7 +24,6 @@ use tf_demo_parser::{
         sendprop::SendPropValue,
         vector::VectorXY,
     },
-    ParserState,
 };
 use tracing::{error, trace};
 
@@ -93,6 +99,7 @@ struct PlayerPatch {
 }
 
 impl Player {
+    #[allow(clippy::too_many_lines)]
     fn parse(packet: &PacketEntity, parser_state: &ParserState, patch: &mut PlayerPatch) {
         for prop in packet.props(parser_state) {
             match (prop.identifier, &prop.value) {
@@ -110,12 +117,13 @@ impl Player {
                     patch.scoreboard_deaths = Some(u32::try_from(val).unwrap_or_default());
                 }
                 (FLAGS, &SendPropValue::Integer(val)) => {
-                    patch.flags = Some(EnumSet::<Flags>::try_from_repr(u32::try_from(val).unwrap_or_default()).unwrap_or_else(
-                        || {
-                            error!("Unknown player flags: {}", val);
-                            EnumSet::<Flags>::new()
-                        },
-                    ));
+                    patch.flags = Some(
+                        EnumSet::<Flags>::try_from_repr(u32::try_from(val).unwrap_or_default())
+                            .unwrap_or_else(|| {
+                                error!("Unknown player flags: {}", val);
+                                EnumSet::<Flags>::new()
+                            }),
+                    );
                 }
                 (CLASS, &SendPropValue::Integer(val)) => {
                     let Ok(class) = Class::try_from(u8::try_from(val).unwrap_or_default()) else {
@@ -149,13 +157,21 @@ impl Player {
                     patch.handle = Some(u32::try_from(h).unwrap_or_default());
                 }
                 (COND_SOURCE, &SendPropValue::Integer(x)) => {
-                    patch.condition_source = Some(u32::try_from(x).unwrap_or_default())
+                    patch.condition_source = Some(u32::try_from(x).unwrap_or_default());
                 }
 
-                (COND_0, &SendPropValue::Integer(x)) => patch.condition_bits[0] = Some(u32::try_from(x).unwrap_or_default()),
-                (COND_1, &SendPropValue::Integer(x)) => patch.condition_bits[1] = Some(u32::try_from(x).unwrap_or_default()),
-                (COND_2, &SendPropValue::Integer(x)) => patch.condition_bits[2] = Some(u32::try_from(x).unwrap_or_default()),
-                (COND_3, &SendPropValue::Integer(x)) => patch.condition_bits[3] = Some(u32::try_from(x).unwrap_or_default()),
+                (COND_0, &SendPropValue::Integer(x)) => {
+                    patch.condition_bits[0] = Some(u32::try_from(x).unwrap_or_default());
+                }
+                (COND_1, &SendPropValue::Integer(x)) => {
+                    patch.condition_bits[1] = Some(u32::try_from(x).unwrap_or_default());
+                }
+                (COND_2, &SendPropValue::Integer(x)) => {
+                    patch.condition_bits[2] = Some(u32::try_from(x).unwrap_or_default());
+                }
+                (COND_3, &SendPropValue::Integer(x)) => {
+                    patch.condition_bits[3] = Some(u32::try_from(x).unwrap_or_default());
+                }
 
                 (COND_BITS, &SendPropValue::Integer(x)) => {
                     if x == 0 || x == 2048 {
@@ -191,15 +207,33 @@ impl Player {
                     patch.weapon_handles[6] = Some(u32::try_from(x).unwrap_or_default());
                 }
 
-                (NUM_COSMETICS, &SendPropValue::Integer(n)) => patch.num_cosmetics = Some(u32::try_from(n).unwrap_or_default()),
-                (COSMETIC_0, &SendPropValue::Integer(x)) => patch.cosmetics[0] = Some(u32::try_from(x).unwrap_or_default()),
-                (COSMETIC_1, &SendPropValue::Integer(x)) => patch.cosmetics[1] = Some(u32::try_from(x).unwrap_or_default()),
-                (COSMETIC_2, &SendPropValue::Integer(x)) => patch.cosmetics[2] = Some(u32::try_from(x).unwrap_or_default()),
-                (COSMETIC_3, &SendPropValue::Integer(x)) => patch.cosmetics[3] = Some(u32::try_from(x).unwrap_or_default()),
-                (COSMETIC_4, &SendPropValue::Integer(x)) => patch.cosmetics[4] = Some(u32::try_from(x).unwrap_or_default()),
-                (COSMETIC_5, &SendPropValue::Integer(x)) => patch.cosmetics[5] = Some(u32::try_from(x).unwrap_or_default()),
-                (COSMETIC_6, &SendPropValue::Integer(x)) => patch.cosmetics[6] = Some(u32::try_from(x).unwrap_or_default()),
-                (COSMETIC_7, &SendPropValue::Integer(x)) => patch.cosmetics[7] = Some(u32::try_from(x).unwrap_or_default()),
+                (NUM_COSMETICS, &SendPropValue::Integer(n)) => {
+                    patch.num_cosmetics = Some(u32::try_from(n).unwrap_or_default());
+                }
+                (COSMETIC_0, &SendPropValue::Integer(x)) => {
+                    patch.cosmetics[0] = Some(u32::try_from(x).unwrap_or_default());
+                }
+                (COSMETIC_1, &SendPropValue::Integer(x)) => {
+                    patch.cosmetics[1] = Some(u32::try_from(x).unwrap_or_default());
+                }
+                (COSMETIC_2, &SendPropValue::Integer(x)) => {
+                    patch.cosmetics[2] = Some(u32::try_from(x).unwrap_or_default());
+                }
+                (COSMETIC_3, &SendPropValue::Integer(x)) => {
+                    patch.cosmetics[3] = Some(u32::try_from(x).unwrap_or_default());
+                }
+                (COSMETIC_4, &SendPropValue::Integer(x)) => {
+                    patch.cosmetics[4] = Some(u32::try_from(x).unwrap_or_default());
+                }
+                (COSMETIC_5, &SendPropValue::Integer(x)) => {
+                    patch.cosmetics[5] = Some(u32::try_from(x).unwrap_or_default());
+                }
+                (COSMETIC_6, &SendPropValue::Integer(x)) => {
+                    patch.cosmetics[6] = Some(u32::try_from(x).unwrap_or_default());
+                }
+                (COSMETIC_7, &SendPropValue::Integer(x)) => {
+                    patch.cosmetics[7] = Some(u32::try_from(x).unwrap_or_default());
+                }
 
                 _ => {
                     trace!("player unused prop {:?}: {prop:?}", packet.entity_index);
@@ -284,25 +318,28 @@ impl Entity for Player {
                     summary.class = patch.class.unwrap_or(summary.class);
                     summary.health = patch.health.unwrap_or(summary.health);
 
-                    for &w in patch.weapon_handles.iter() {
+                    for &w in &patch.weapon_handles {
                         if let Some(w) = w {
                             game.weapon_owners.insert(w, user_id);
                         }
                     }
 
-                    for &c in patch.cosmetics.iter() {
+                    for &c in &patch.cosmetics {
                         if let Some(c) = c {
                             game.cosmetic_owners.insert(c, user_id);
                         }
                     }
                 } else {
-                    error!("No summary for new player steamid: {} (user_id: {})", steamid, s.user_id);
+                    error!(
+                        "No summary for new player steamid: {} (user_id: {})",
+                        steamid, s.user_id
+                    );
                 }
             } else {
                 error!("No steamid mapping for new player user_id: {}", s.user_id);
             }
         } else {
-            error!("No user_id ready for new user! {packet:?}")
+            error!("No user_id ready for new user! {packet:?}");
         }
 
         s.apply_patch(&patch);
@@ -329,7 +366,10 @@ impl Entity for Player {
         };
 
         let Some(summary) = game.player_summaries.get_mut(&steamid) else {
-            error!("Unknown player summary for steamid: {} (user_id: {})", steamid, user_id);
+            error!(
+                "Unknown player summary for steamid: {} (user_id: {})",
+                steamid, user_id
+            );
             return patch;
         };
 
@@ -371,13 +411,13 @@ impl Entity for Player {
             game.weapon_owners.insert(aw, user_id);
         }
 
-        for &w in patch.weapon_handles.iter() {
+        for &w in &patch.weapon_handles {
             if let Some(w) = w {
                 game.weapon_owners.insert(w, user_id);
             }
         }
 
-        for &c in patch.cosmetics.iter() {
+        for &c in &patch.cosmetics {
             if let Some(c) = c {
                 game.cosmetic_owners.insert(c, user_id);
             }
@@ -407,10 +447,16 @@ impl Entity for Player {
                 }
                 summary.tick_end = Some(game.tick);
             } else {
-                error!("Unknown player summary for steamid: {} (user_id: {}) during delete", steamid, user_id);
+                error!(
+                    "Unknown player summary for steamid: {} (user_id: {}) during delete",
+                    steamid, user_id
+                );
             }
         } else {
-            error!("Unknown steamid mapping for player user_id: {} during delete", user_id);
+            error!(
+                "Unknown steamid mapping for player user_id: {} during delete",
+                user_id
+            );
         }
     }
 

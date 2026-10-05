@@ -2952,7 +2952,6 @@ dependencies = [
  "awc",
  "enumset",
  "keyvalues-serde",
- "lazy_static",
  "merge",
  "nalgebra",
  "num_enum",

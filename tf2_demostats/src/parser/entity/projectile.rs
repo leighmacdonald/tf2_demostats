@@ -3,7 +3,10 @@ use crate::{
     parser::{
         entity::{Entity, EntityClass, PROJECTILE_BOX},
         game::{Effects, GrenadeType, INVALID_HANDLE},
-        props::*,
+        props::{
+            DEFLECT_OWNER, EFFECTS, GRENADE_DEFLECTED, GRENADE_ORIGIN, MODEL, ORIGIN,
+            ORIGINAL_LAUNCHER, OWNER, PIPE_TYPE, ROCKET_DEFLECTED, ROCKET_ORIGIN, TEAM,
+        },
         summarizer::{Explosion, MatchAnalyzerView},
         weapon::projectile_explosion_radius,
     },
@@ -112,8 +115,7 @@ impl Projectile {
         let class_name = parser_state
             .server_classes
             .get(<ClassId as Into<usize>>::into(packet.server_class))
-            .map(|s| s.name.to_string())
-            .unwrap_or("UNKNOWN_PROJECTILE".to_string());
+            .map_or("UNKNOWN_PROJECTILE".to_string(), |s| s.name.to_string());
 
         for prop in packet.props(parser_state) {
             match (prop.identifier, &prop.value) {
@@ -121,7 +123,7 @@ impl Projectile {
                     patch.origin = Some(convert_vec(o));
                 }
                 (ROCKET_DEFLECTED | GRENADE_DEFLECTED, &SendPropValue::Integer(b)) => {
-                    patch.is_reflected = Some(b > 0)
+                    patch.is_reflected = Some(b > 0);
                 }
                 (OWNER | DEFLECT_OWNER, &SendPropValue::Integer(h)) => {
                     let h = u32::try_from(h).unwrap_or_default();
@@ -144,7 +146,7 @@ impl Projectile {
                             .and_then(|uid| game.user_id_to_steam_id.get(uid))
                             .and_then(|sid| game.player_summaries.get(sid))
                             .and_then(|p| game.get_player(&p.entity_id))
-                            .and_then(|p| p.handle());
+                            .and_then(Entity::handle);
 
                         patch.owner = handle;
                     }
@@ -165,7 +167,9 @@ impl Projectile {
                         continue;
                     }
 
-                    let Ok(grenade_type) = GrenadeType::try_from(u16::try_from(t).unwrap_or_default()) else {
+                    let Ok(grenade_type) =
+                        GrenadeType::try_from(u16::try_from(t).unwrap_or_default())
+                    else {
                         error!("Unknown grenade type {t} when parsing {packet:?}");
                         continue;
                     };
@@ -177,16 +181,15 @@ impl Projectile {
 
                 (EFFECTS, &SendPropValue::Integer(f)) => {
                     patch.effects = Some(
-                        EnumSet::<Effects>::try_from_repr(u16::try_from(f).unwrap_or_default()).unwrap_or_else(|| {
-                            error!("Unknown entity effects on projectile: {}", f);
-                            EnumSet::<_>::new()
-                        }),
+                        EnumSet::<Effects>::try_from_repr(u16::try_from(f).unwrap_or_default())
+                            .unwrap_or_else(|| {
+                                error!("Unknown entity effects on projectile: {}", f);
+                                EnumSet::<_>::new()
+                            }),
                     );
                 }
 
-                (INITIAL_SPEED, _) => {}
-                (ROCKET_ROTATION | GRENADE_ROTATION, _) => {}
-
+                // m_vInitialVelocity / m_angRotation are known but unused.
                 _ => {}
             }
         }
@@ -220,6 +223,7 @@ impl Projectile {
 }
 
 impl Entity for Projectile {
+    #[allow(clippy::too_many_lines)]
     fn new(
         packet: &PacketEntity,
         parser_state: &ParserState,
@@ -228,8 +232,7 @@ impl Entity for Projectile {
         let class_name = parser_state
             .server_classes
             .get(<ClassId as Into<usize>>::into(packet.server_class))
-            .map(|s| s.name.to_string())
-            .unwrap_or("UNKNOWN_PROJECTILE".to_string());
+            .map_or("UNKNOWN_PROJECTILE".to_string(), |s| s.name.to_string());
 
         let mut p = ProjectilePatch::default();
         Projectile::parse(packet, parser_state, game, &mut p);
@@ -278,14 +281,14 @@ impl Entity for Projectile {
 
         let owner = p
             .owner
-            .and_then(|x| if x == INVALID_HANDLE { None } else { Some(x) })
+            .filter(|&x| x != INVALID_HANDLE)
             .or(p
                 .original_launcher_handle
                 .and_then(|h| game.weapon_owners.get(&h))
                 .and_then(|uid| game.user_id_to_steam_id.get(uid))
                 .and_then(|sid| game.player_summaries.get(sid))
                 .and_then(|p| game.get_player(&p.entity_id))
-                .and_then(|p| p.handle()))
+                .and_then(Entity::handle))
             .unwrap_or_else(|| {
                 error!("No owner for Projectile! {packet:?}");
                 0
@@ -411,7 +414,7 @@ impl Entity for Projectile {
             is_sentry,
             original_launcher_handle: 0, // only for reading owner
             origin,
-            velocity: Default::default(),
+            velocity: Vec3::new(0.0, 0.0, 0.0),
             original_owner,
             owner,
             is_reflected: p.is_reflected.unwrap_or(false),
@@ -434,8 +437,8 @@ impl Entity for Projectile {
         let mut patch = Box::new(ProjectilePatch::default());
         Projectile::parse(packet, parser_state, game, &mut patch);
 
-        let owner_changed = patch.owner.map(|r| r != self.owner).unwrap_or(false);
-        let team_changed = patch.team.map(|r| r != self.team).unwrap_or(false);
+        let owner_changed = patch.owner.is_some_and(|r| r != self.owner);
+        let team_changed = patch.team.is_some_and(|r| r != self.team);
         if team_changed && !owner_changed {
             error!("Projectile changed team without changing owner entity {patch:?}");
         }

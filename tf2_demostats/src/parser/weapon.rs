@@ -73,7 +73,7 @@ pub fn weapon_name(weapon: &schema::Item, class: Class) -> &'static str {
             .map(strip_prefix)
             .map(|s| ustr::ustr(s).as_str()))
         .map(|s| log_name(s, class))
-        .unwrap_or("UNKNOWN")
+        .map_or("UNKNOWN", |s| s)
 }
 
 pub fn log_name(weapon_name: &str, class: Class) -> &str {
@@ -105,7 +105,7 @@ pub fn log_name(weapon_name: &str, class: Class) -> &str {
 
 pub fn projectile_log_name(
     p: &entity::Projectile,
-    target_team: &Team,
+    target_team: Team,
     item: Option<&schema::Item>,
 ) -> &'static str {
     if p.is_sentry {
@@ -117,8 +117,8 @@ pub fn projectile_log_name(
     }
     trace!("proj log name target:{:?} {p:?}", target_team);
     if p.is_reflected
-        && (p.original_team == *target_team
-            || (p.original_team != *target_team
+        && (p.original_team == target_team
+            || (p.original_team != target_team
                 && p.owner != p.original_owner
 								// reflected sticky kills on their own team get attributed to the original
 								// demo who triggers the det.
@@ -167,7 +167,7 @@ pub fn projectile_log_name(
     if class_name == "CTFProjectile_MechanicalArmOrb" {
         return "tf_projectile_mechanicalarmorb";
     }
-    if let Some(ref item) = item {
+    if let Some(item) = item {
         trace!("projectile has schema {item:?}");
         if let Some(ref ln) = item.item_logname {
             return ustr::ustr(ln).as_str();

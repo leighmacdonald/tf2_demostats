@@ -35,7 +35,12 @@ impl DemoServiceImpl {
     }
 }
 
-#[allow(refining_impl_trait_internal, refining_impl_trait_reachable)]
+// The handler body is synchronous; `async` is part of the generated trait.
+#[allow(
+    refining_impl_trait_internal,
+    refining_impl_trait_reachable,
+    clippy::unused_async_trait_impl
+)]
 impl DemoService for DemoServiceImpl {
     async fn parse_demo(
         &self,

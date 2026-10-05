@@ -3,12 +3,16 @@ use crate::{
     parser::{
         entity::{self, Entity, ProjectileType},
         game::{
-            Damage, DamageEffect, DamageType, Death, INVALID_HANDLE, PlayerAnimation,
-            RoundState, TICK_INTERVAL, WeaponId,
+            Damage, DamageEffect, DamageType, Death, INVALID_HANDLE, PlayerAnimation, RoundState,
+            TICK_INTERVAL, WeaponId,
         },
         is_false,
         player::PlayerSummary,
-        props::*,
+        props::{
+            ANIM_ID, ANIM_PLAYER, EFFECT_DAMAGE_TYPE, EFFECT_ENTITY, EFFECT_NAME, EFFECT_ORIGIN_X,
+            EFFECT_ORIGIN_Y, EFFECT_ORIGIN_Z, EFFECT_START_X, EFFECT_START_Y, EFFECT_START_Z,
+            FIRE_BULLETS_PLAYER, ROUND_STATE, SIM_TIME, WAITING_FOR_PLAYERS,
+        },
         weapon::{self, projectile_log_name, sentry_name, taunt_log_name},
     },
     schema::{Item, Schema},
@@ -31,17 +35,15 @@ use tf_demo_parser::{
     demo::{
         data::{DemoTick, MaybeUtf8String, UserInfo},
         gameevent_gen::{
-            BuildingHealedEvent, CapperKilledEvent, CrossbowHealEvent,
-            EnvironmentalDeathEvent, GameEventType, ItemPickupEvent,
-            KilledCappingPlayerEvent, MedicDeathEvent, ObjectDeflectedEvent,
-            ObjectDetonatedEvent, ObjectRemovedEvent, PayloadPushedEvent,
+            BuildingHealedEvent, CapperKilledEvent, CrossbowHealEvent, EnvironmentalDeathEvent,
+            GameEventType, ItemPickupEvent, KilledCappingPlayerEvent, MedicDeathEvent,
+            ObjectDeflectedEvent, ObjectDetonatedEvent, ObjectRemovedEvent, PayloadPushedEvent,
             PlayerBuiltObjectEvent, PlayerCarryObjectEvent, PlayerDeathEvent,
             PlayerDropObjectEvent, PlayerExtinguishedEvent, PlayerHealOnHitEvent,
-            PlayerHealedEvent, PlayerHurtEvent, PlayerTeleportedEvent,
-            PlayerUpgradedObjectEvent, ProjectileDirectHitEvent,
-            TeamPlayCaptureBlockedEvent, TeamPlayPointCapturedEvent,
-            TeamPlayPointStartCaptureEvent, VoteCastEvent, VoteChangedEvent,
-            VoteFailedEvent, VoteOptionsEvent, VotePassedEvent, VoteStartedEvent,
+            PlayerHealedEvent, PlayerHurtEvent, PlayerTeleportedEvent, PlayerUpgradedObjectEvent,
+            ProjectileDirectHitEvent, TeamPlayCaptureBlockedEvent, TeamPlayPointCapturedEvent,
+            TeamPlayPointStartCaptureEvent, VoteCastEvent, VoteChangedEvent, VoteFailedEvent,
+            VoteOptionsEvent, VotePassedEvent, VoteStartedEvent,
         },
         gamevent::{GameEvent, GameEventValue, RawGameEvent},
         message::{
@@ -184,7 +186,7 @@ pub struct VoteSummary {
 }
 
 /// One `"<name> wants to scramble teams"` / `"wants to rock the vote"`
-/// trigger that feeds a SourceMod vote.
+/// trigger that feeds a `SourceMod` vote.
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct SmVoteInitiator {
     pub name: String,
@@ -210,7 +212,7 @@ pub struct SmVoteOption {
     pub votes: u32,
 }
 
-/// A SourceMod vote reconstructed from `Text` user messages
+/// A `SourceMod` vote reconstructed from `Text` user messages
 /// (`PrintTalk` triggers/results, `PrintCenter` progress).
 /// Individual ballots are not broadcast, so only aggregate `options`
 /// tallies are available (unlike native votes, which list every voter).
@@ -235,6 +237,9 @@ pub struct SourceModVote {
     pub passed: Option<bool>,
 }
 
+// Chat flags are part of the JSON/proto schema, so they stay as plain
+// bools rather than a bitflag struct.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ChatMessage {
     pub tick: DemoTick,
@@ -326,7 +331,7 @@ pub struct MatchAnalyzer<'a> {
     projectile_class_ids: HashSet<ClassId>,
 
     vote_sessions: HashMap<u32, VoteSummary>, // voteidx -> in-progress native vote
-    finished_votes: Vec<VoteSummary>, // closed native votes (voteidx reuse across maps)
+    finished_votes: Vec<VoteSummary>,         // closed native votes (voteidx reuse across maps)
 
     point_captures: Vec<PointCaptureStart>,
 
@@ -359,6 +364,7 @@ pub struct MatchAnalyzerView<'a> {
 }
 
 impl MatchAnalyzerView<'_> {
+    #[must_use]
     pub fn get_player(&self, id: &EntityId) -> Option<&entity::Player> {
         self.entities
             .get(usize::from(*id))
@@ -433,7 +439,10 @@ impl MatchAnalyzerView<'_> {
 
 #[derive(Debug)]
 pub enum Event {
-    Death { death: Box<PlayerDeathEvent>, tick: DemoTick },
+    Death {
+        death: Box<PlayerDeathEvent>,
+        tick: DemoTick,
+    },
     Hurt(PlayerHurtEvent),
     MedigunCharged(u32),
 }
@@ -575,9 +584,11 @@ fn parse_capper_entities(cappers: &MaybeUtf8String) -> Vec<u32> {
 /// `[amount_healed, health_after, player_entity]`.
 fn parse_take_health(values: &[GameEventValue]) -> Option<(u32, u32)> {
     match values {
-        [GameEventValue::Long(amount), GameEventValue::Long(_), GameEventValue::Long(entity)] => {
-            Some((*entity, *amount))
-        }
+        [
+            GameEventValue::Long(amount),
+            GameEventValue::Long(_),
+            GameEventValue::Long(entity),
+        ] => Some((*entity, *amount)),
         _ => None,
     }
 }
@@ -587,59 +598,65 @@ fn parse_take_health(values: &[GameEventValue]) -> Option<(u32, u32)> {
 /// `item_pickup` instead; this only validates the observed shape.
 fn is_ammo_pickup(values: &[GameEventValue]) -> bool {
     match values {
-        [GameEventValue::Long(kind), GameEventValue::Long(_), GameEventValue::Long(_)] => {
-            (1..=6).contains(kind)
-        }
+        [
+            GameEventValue::Long(kind),
+            GameEventValue::Long(_),
+            GameEventValue::Long(_),
+        ] => (1..=6).contains(kind),
         _ => false,
     }
 }
 
 impl<'a> MatchAnalyzer<'a> {
+    #[must_use]
+    // Fixed-size entity arena: the boxed arrays are indexed by entity ID,
+    // so they stay arrays rather than slices.
+    #[allow(clippy::large_stack_arrays)]
     pub fn new(schema: &'a Schema) -> Self {
         Self {
             schema,
-            chat: Default::default(),
-            current_round: Default::default(),
-            rounds: Default::default(),
-            player_summaries: Default::default(),
-            user_id_to_steam_id: Default::default(),
-            user_entities: Default::default(),
-            weapon_owners: Default::default(),
-            cosmetic_owners: Default::default(),
-            entity_handles: Default::default(),
+            chat: Vec::new(),
+            current_round: RoundSummary::default(),
+            rounds: Vec::new(),
+            player_summaries: HashMap::new(),
+            user_id_to_steam_id: HashMap::new(),
+            user_entities: HashMap::new(),
+            weapon_owners: HashMap::new(),
+            cosmetic_owners: HashMap::new(),
+            entity_handles: HashMap::new(),
             entities: Box::new([const { None }; ENTITY_COUNT]),
             colliders: Box::new([const { None }; ENTITY_COUNT]),
-            effects: Default::default(),
-            models: Default::default(),
-            waiting_for_players: Default::default(),
-            round_state: Default::default(),
-            span: Default::default(),
-            tick: Default::default(),
-            server_tick: Default::default(),
-            tick_events: Default::default(),
-            hurts: Default::default(),
-            sentry_shots: Default::default(),
-            explosions: Default::default(),
-            airblasts: Default::default(),
-            deleted_entities: Default::default(),
+            effects: HashMap::new(),
+            models: HashMap::new(),
+            waiting_for_players: false,
+            round_state: RoundState::default(),
+            span: None,
+            tick: DemoTick::default(),
+            server_tick: 0,
+            tick_events: Vec::new(),
+            hurts: Vec::new(),
+            sentry_shots: Vec::new(),
+            explosions: Vec::new(),
+            airblasts: HashSet::new(),
+            deleted_entities: HashSet::new(),
             world: QueryPipeline::new(),
             island_manager: IslandManager::new(),
             collider_set: ColliderSet::with_capacity(ENTITY_COUNT),
             rigid_body_set: RigidBodySet::with_capacity(0),
             mutated_colliders: Vec::with_capacity(ENTITY_COUNT),
             removed_colliders: Vec::with_capacity(ENTITY_COUNT),
-            projectile_class_ids: Default::default(),
-            weapon_class_ids: Default::default(),
-            vote_sessions: Default::default(),
-            finished_votes: Default::default(),
-            point_captures: Default::default(),
-            kills: Default::default(),
-            sm_votes: Default::default(),
-            sm_current: Default::default(),
-            sm_pending_scramble: Default::default(),
-            sm_pending_rtv: Default::default(),
-            sm_pending_nominations: Default::default(),
-            sm_map_announced_tick: Default::default(),
+            projectile_class_ids: HashSet::new(),
+            weapon_class_ids: HashSet::new(),
+            vote_sessions: HashMap::new(),
+            finished_votes: Vec::new(),
+            point_captures: Vec::new(),
+            kills: Vec::new(),
+            sm_votes: Vec::new(),
+            sm_current: None,
+            sm_pending_scramble: Vec::new(),
+            sm_pending_rtv: Vec::new(),
+            sm_pending_nominations: Vec::new(),
+            sm_map_announced_tick: None,
         }
     }
 
@@ -649,11 +666,9 @@ impl<'a> MatchAnalyzer<'a> {
         text: Option<&str>,
         data: Option<Stream>,
     ) -> ReadResult<()> {
-        if let Some(user_info) = UserInfo::parse_from_string_table(
-            u16::try_from(index).unwrap_or_default(),
-            text,
-            data,
-        )? {
+        if let Some(user_info) =
+            UserInfo::parse_from_string_table(u16::try_from(index).unwrap_or_default(), text, data)?
+        {
             let entity_id = user_info.entity_id;
             let user_id = user_info.player_info.user_id;
             let steam_id = user_info.player_info.steam_id.clone();
@@ -669,7 +684,7 @@ impl<'a> MatchAnalyzer<'a> {
                     summary.connection_count += 1;
                     summary.entity_id = user_info.entity_id; // Update to the latest entity_id
                     summary.user_id = user_id.into(); // Update to the latest user_id
-                    summary.name = user_info.player_info.name.clone(); // Name might change
+                    summary.name.clone_from(&user_info.player_info.name); // Name might change
                 })
                 .or_insert_with(|| PlayerSummary {
                     name: user_info.player_info.name,
@@ -690,9 +705,14 @@ impl<'a> MatchAnalyzer<'a> {
         Ok(())
     }
 
-    // Calculate weapon name in a player damage situation
-    //
-    // Note that damage_bits will only be provided for deaths.
+    /// Calculate weapon name in a player damage situation.
+    ///
+    /// Note that `damage_bits` will only be provided for deaths.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a hurt marked as a non-blast projectile lacks a payload.
+    #[allow(clippy::too_many_lines)]
     pub fn weapon_name_from_damage(
         &self,
         damage_type: DamageType,
@@ -703,12 +723,15 @@ impl<'a> MatchAnalyzer<'a> {
     ) -> &'static str {
         let mut my_name: &'static str = "UNKNOWN";
 
-        let dmg_to_victim: Vec<_> = hurt.map(|h| vec![h]).unwrap_or_else(|| {
-            self.hurts
-                .iter()
-                .filter(|h| h.victim == victim.user_id)
-                .collect::<Vec<&Hurt>>()
-        });
+        let dmg_to_victim: Vec<_> = hurt.map_or_else(
+            || {
+                self.hurts
+                    .iter()
+                    .filter(|h| h.victim == victim.user_id)
+                    .collect::<Vec<&Hurt>>()
+            },
+            |h| vec![h],
+        );
 
         let h = attacker.last_active_weapon_handle;
         if let Some(weapon) = self.get_weapon(&h) {
@@ -744,7 +767,7 @@ impl<'a> MatchAnalyzer<'a> {
                 .projectile
                 .launcher_schema_id
                 .and_then(|id| self.schema.items.get(&id));
-            my_name = projectile_log_name(&exp.projectile, &victim.team, item);
+            my_name = projectile_log_name(&exp.projectile, victim.team, item);
         } else if (damage_bits.contains(Damage::Blast)
             || damage_type == DamageType::BurningFlare
             || damage_type == DamageType::Plasma
@@ -788,7 +811,7 @@ impl<'a> MatchAnalyzer<'a> {
                 exps.drain(1..);
             }
 
-            if let Some(ref exp) = exps.first() {
+            if let Some(exp) = exps.first() {
                 trace!("blast with exp {:?}", exp);
 
                 let item = exp
@@ -796,7 +819,7 @@ impl<'a> MatchAnalyzer<'a> {
                     .launcher_schema_id
                     .and_then(|id| self.schema.items.get(&id));
 
-                my_name = projectile_log_name(&exp.projectile, &victim.team, item);
+                my_name = projectile_log_name(&exp.projectile, victim.team, item);
             } else if damage_bits.contains(Damage::Blast) && damage_type != DamageType::BurningFlare
             {
                 let d = EuclideanSpace::distance(&attacker.origin, &victim.origin);
@@ -846,7 +869,7 @@ impl<'a> MatchAnalyzer<'a> {
             }) {
                 my_name = shield_logname;
             } else {
-                error!("Chart impact without a shield?!")
+                error!("Chart impact without a shield?!");
             }
         } else if damage_type == DamageType::PlayerSentry {
             my_name = "wrangler_kill";
@@ -890,6 +913,7 @@ impl<'a> MatchAnalyzer<'a> {
         my_name
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handle_packet_entity(&mut self, packet: &PacketEntity, parser_state: &ParserState) {
         let Some(class) = parser_state
             .server_classes
@@ -1066,10 +1090,8 @@ impl<'a> MatchAnalyzer<'a> {
 
         if let Some(e) = &self.entities[eid] {
             if let Some(h) = e.handle() {
-                self.entity_handles.insert(
-                    h,
-                    EntityId::from(u32::try_from(eid).unwrap_or_default()),
-                );
+                self.entity_handles
+                    .insert(h, EntityId::from(u32::try_from(eid).unwrap_or_default()));
             }
 
             if let (Some(shape), Some(origin)) = (e.shape(), e.origin()) {
@@ -1107,6 +1129,7 @@ impl<'a> MatchAnalyzer<'a> {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn handle_player_resource(&mut self, entity: &PacketEntity, _parser_state: &ParserState) {
         for prop in &entity.props {
             let Some((table_name, prop_name)) = prop.identifier.names() else {
@@ -1128,7 +1151,6 @@ impl<'a> MatchAnalyzer<'a> {
                     && let Some(player) = self.player_summaries.get_mut(&steamid)
                 {
                     match table_name.as_str() {
-                        "m_iTeam" => {}
                         "m_iHealing" => {
                             let hi = i64::try_from(&prop.value).unwrap_or_default();
                             if hi < 0 {
@@ -1157,52 +1179,63 @@ impl<'a> MatchAnalyzer<'a> {
                             player.scoreboard_healing = h;
                         }
                         "m_iTotalScore" => {
-                            player.points =
-                                Some(u32::try_from(i64::try_from(&prop.value).unwrap_or_default()).unwrap_or_default())
+                            player.points = Some(
+                                u32::try_from(i64::try_from(&prop.value).unwrap_or_default())
+                                    .unwrap_or_default(),
+                            );
                         }
                         "m_iDamage" => {
-                            player.scoreboard_damage =
-                                Some(u32::try_from(i64::try_from(&prop.value).unwrap_or_default()).unwrap_or_default())
+                            player.scoreboard_damage = Some(
+                                u32::try_from(i64::try_from(&prop.value).unwrap_or_default())
+                                    .unwrap_or_default(),
+                            );
                         }
                         "m_iDeaths" => {
-                            player.scoreboard_deaths =
-                                Some(u32::try_from(i64::try_from(&prop.value).unwrap_or_default()).unwrap_or_default())
+                            player.scoreboard_deaths = Some(
+                                u32::try_from(i64::try_from(&prop.value).unwrap_or_default())
+                                    .unwrap_or_default(),
+                            );
                         }
                         "m_iScore" => {
                             // iScore is close to number of kills; but counts post-game kills and decrements on suicide.
-                            player.scoreboard_kills =
-                                Some(u32::try_from(i64::try_from(&prop.value).unwrap_or_default()).unwrap_or_default())
+                            player.scoreboard_kills = Some(
+                                u32::try_from(i64::try_from(&prop.value).unwrap_or_default())
+                                    .unwrap_or_default(),
+                            );
                         }
                         "m_iBonusPoints" => {
-                            player.bonus_points =
-                                Some(u32::try_from(i64::try_from(&prop.value).unwrap_or_default()).unwrap_or_default())
+                            player.bonus_points = Some(
+                                u32::try_from(i64::try_from(&prop.value).unwrap_or_default())
+                                    .unwrap_or_default(),
+                            );
                         }
-                        "m_iPlayerClass" => {}
-                        "m_iPlayerLevel" => {}
-                        "m_bAlive" => {}
-                        "m_flNextRespawnTime" => {}
-                        "m_iActiveDominations" => {}
-                        "m_iDamageAssist" => {}
-                        "m_iPing" => {}
-                        "m_iChargeLevel" => {}
-                        "m_iStreaks" => {}
-                        "m_iHealth" => {}
-                        "m_iMaxHealth" => {}
-                        "m_iMaxBuffedHealth" => {}
-                        "m_iPlayerClassWhenKilled" => {}
-                        "m_bValid" => {}
-                        "m_iUserID" => {}
-                        "m_iConnectionState" => {}
-                        "m_flConnectTime" => {}
-                        "m_iDamageBoss" => {}
-                        "m_bArenaSpectator" => {}
-                        "m_iHealingAssist" => {}
-                        "m_iBuybackCredits" => {}
-                        "m_iUpgradeRefundCredits" => {}
-                        "m_iCurrencyCollected" => {}
-                        "m_iDamageBlocked" => {}
-                        "m_iAccountID" => {}
-                        "m_bConnected" => {}
+                        "m_iTeam"
+                        | "m_iPlayerClass"
+                        | "m_iPlayerLevel"
+                        | "m_bAlive"
+                        | "m_flNextRespawnTime"
+                        | "m_iActiveDominations"
+                        | "m_iDamageAssist"
+                        | "m_iPing"
+                        | "m_iChargeLevel"
+                        | "m_iStreaks"
+                        | "m_iHealth"
+                        | "m_iMaxHealth"
+                        | "m_iMaxBuffedHealth"
+                        | "m_iPlayerClassWhenKilled"
+                        | "m_bValid"
+                        | "m_iUserID"
+                        | "m_iConnectionState"
+                        | "m_flConnectTime"
+                        | "m_iDamageBoss"
+                        | "m_bArenaSpectator"
+                        | "m_iHealingAssist"
+                        | "m_iBuybackCredits"
+                        | "m_iUpgradeRefundCredits"
+                        | "m_iCurrencyCollected"
+                        | "m_iDamageBlocked"
+                        | "m_iAccountID"
+                        | "m_bConnected" => {}
                         x => {
                             error!("Unhandled player resource type: {x}");
                         }
@@ -1218,10 +1251,12 @@ impl<'a> MatchAnalyzer<'a> {
                     self.waiting_for_players = *x == 1;
                     trace!("Waiting for players: {}", self.waiting_for_players);
                 }
-                (ROUND_STATE, SendPropValue::Integer(x)) => match RoundState::try_from(u16::try_from(*x).unwrap_or_default()) {
-                    Ok(x) => self.round_state = x,
-                    Err(e) => error!("Could not parse RoundState: {e}"),
-                },
+                (ROUND_STATE, SendPropValue::Integer(x)) => {
+                    match RoundState::try_from(u16::try_from(*x).unwrap_or_default()) {
+                        Ok(x) => self.round_state = x,
+                        Err(e) => error!("Could not parse RoundState: {e}"),
+                    }
+                }
                 (id, value) => {
                     trace!("Unhandled game rule: {:?} {value:?}", id.names());
                 }
@@ -1229,6 +1264,7 @@ impl<'a> MatchAnalyzer<'a> {
         }
     }
 
+    #[must_use]
     pub fn get_entity_by_handle(&self, handle: &u32) -> Option<&dyn Entity> {
         self.entity_handles
             .get(handle)
@@ -1244,6 +1280,7 @@ impl<'a> MatchAnalyzer<'a> {
             .map(|v| &**v)
     }
 
+    #[must_use]
     pub fn get_weapon(&self, handle: &u32) -> Option<&entity::Weapon> {
         self.get_entity_by_handle(handle).and_then(|e| {
             let z = e.weapon();
@@ -1254,6 +1291,7 @@ impl<'a> MatchAnalyzer<'a> {
         })
     }
 
+    #[must_use]
     pub fn get_player(&self, id: &EntityId) -> Option<&entity::Player> {
         self.entities
             .get(usize::from(*id))
@@ -1299,8 +1337,7 @@ impl<'a> MatchAnalyzer<'a> {
         };
         let (killer_pos, killer_angles) = killer
             .as_deref()
-            .map(|k| self.player_pos_angles(k))
-            .unwrap_or((None, None));
+            .map_or_else(|| (None, None), |k| self.player_pos_angles(k));
         let (victim_pos, victim_angles) = self.player_pos_angles(victim_steamid);
         self.kills.push(KillEvent {
             tick,
@@ -1314,6 +1351,7 @@ impl<'a> MatchAnalyzer<'a> {
         });
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn handle_player_death(&mut self, death: &PlayerDeathEvent, tick: DemoTick) {
         debug!(
             "Player death {death:?} {} {:?}",
@@ -1517,17 +1555,17 @@ impl<'a> MatchAnalyzer<'a> {
         }
     }
 
-    fn _get_player_summary(&self, eid: &EntityId) -> Option<&PlayerSummary> {
+    fn _get_player_summary(&self, eid: EntityId) -> Option<&PlayerSummary> {
         self.user_entities
-            .get(eid)
+            .get(&eid)
             .and_then(|uid| self.user_id_to_steam_id.get(uid))
             .and_then(|sid| self.player_summaries.get(sid))
     }
 
-    fn get_player_summary_mut(&mut self, eid: &EntityId) -> Option<&mut PlayerSummary> {
+    fn get_player_summary_mut(&mut self, eid: EntityId) -> Option<&mut PlayerSummary> {
         let steam_id = self
             .user_entities
-            .get(eid)
+            .get(&eid)
             .and_then(|uid| self.user_id_to_steam_id.get(uid))?
             .clone();
         self.player_summaries.get_mut(&steam_id)
@@ -1535,7 +1573,7 @@ impl<'a> MatchAnalyzer<'a> {
 
     pub fn get_player_summary_mut_handle(&mut self, handle: &u32) -> Option<&mut PlayerSummary> {
         let eid = *self.entity_handles.get(handle)?;
-        self.get_player_summary_mut(&eid)
+        self.get_player_summary_mut(eid)
     }
 
     pub fn handle_point_captured(&mut self, cap: &TeamPlayPointCapturedEvent) {
@@ -1543,7 +1581,7 @@ impl<'a> MatchAnalyzer<'a> {
 
         for entity_id_val in cap.cappers.as_bytes() {
             let eid = EntityId::from(u32::from(*entity_id_val));
-            if let Some(player) = self.get_player_summary_mut(&eid) {
+            if let Some(player) = self.get_player_summary_mut(eid) {
                 player.handle_capture();
             } else {
                 error!("Could not lookup player with entity id {eid} in capture event");
@@ -1555,7 +1593,7 @@ impl<'a> MatchAnalyzer<'a> {
         trace!("Capture blocked {:?}", cap);
 
         let eid = EntityId::from(u32::from(cap.blocker));
-        if let Some(player) = self.get_player_summary_mut(&eid) {
+        if let Some(player) = self.get_player_summary_mut(eid) {
             player.handle_capture_blocked();
         } else {
             error!("Could not lookup player with entity id {eid} in capture blocked event");
@@ -1571,7 +1609,7 @@ impl<'a> MatchAnalyzer<'a> {
     }
 
     fn player_by_entity_mut(&mut self, entity: u32) -> Option<&mut PlayerSummary> {
-        self.get_player_summary_mut(&EntityId::from(entity))
+        self.get_player_summary_mut(EntityId::from(entity))
     }
 
     /// Resolve an ambiguous byte-sized player ref. Field conventions split
@@ -1580,7 +1618,7 @@ impl<'a> MatchAnalyzer<'a> {
     /// (`BuildingHealed.healer`, `PlayerHealOnHit.ent_index`), while
     /// `KilledCappingPlayer`/`CapperKilled` ids match entity slots too
     /// (a userid-first lookup demonstrably misattributed capping kills to
-    /// SourceTV, whose low userid collides with live entity slots).
+    /// `SourceTV`, whose low userid collides with live entity slots).
     /// Entity-first therefore wins; userid is the fallback for refs that
     /// are really userids (`CrossbowHeal`-style ids are handled userid-only
     /// at their call sites). 0 (world/none) resolves to nobody.
@@ -1614,7 +1652,10 @@ impl<'a> MatchAnalyzer<'a> {
         if let Some(healer) = self.player_by_user_id_mut(e.healer) {
             healer.handle_heal_given(u32::from(e.amount));
         } else {
-            error!("Could not lookup healer with user id {} in player_healed", e.healer);
+            error!(
+                "Could not lookup healer with user id {} in player_healed",
+                e.healer
+            );
         }
     }
 
@@ -1650,7 +1691,10 @@ impl<'a> MatchAnalyzer<'a> {
         if let Some(healer) = self.player_by_ambiguous_id_mut(e.healer) {
             healer.handle_extinguish();
         } else {
-            error!("Could not lookup healer {} in player_extinguished", e.healer);
+            error!(
+                "Could not lookup healer {} in player_extinguished",
+                e.healer
+            );
         }
     }
 
@@ -1676,7 +1720,10 @@ impl<'a> MatchAnalyzer<'a> {
         if let Some(medic) = self.player_by_user_id_mut(e.user_id) {
             medic.handle_dropped_uber();
         } else {
-            error!("Could not lookup medic with user id {} in medic_death", e.user_id);
+            error!(
+                "Could not lookup medic with user id {} in medic_death",
+                e.user_id
+            );
         }
     }
 
@@ -1685,7 +1732,10 @@ impl<'a> MatchAnalyzer<'a> {
         if let Some(player) = self.player_by_user_id_mut(e.user_id) {
             player.handle_reflect();
         } else {
-            error!("Could not lookup player with user id {} in object_deflected", e.user_id);
+            error!(
+                "Could not lookup player with user id {} in object_deflected",
+                e.user_id
+            );
         }
     }
 
@@ -1784,9 +1834,13 @@ impl<'a> MatchAnalyzer<'a> {
         if let Some(victim) = self.player_by_ambiguous_id_mut(e.victim) {
             victim.handle_environmental_death();
         } else {
-            error!("Could not lookup victim {} in environmental_death", e.victim);
+            error!(
+                "Could not lookup victim {} in environmental_death",
+                e.victim
+            );
         }
-        if e.killer != 0 && e.killer != e.victim
+        if e.killer != 0
+            && e.killer != e.victim
             && let Some(killer) = self.player_by_ambiguous_id_mut(e.killer)
         {
             killer.handle_environmental_kill();
@@ -1846,7 +1900,10 @@ impl<'a> MatchAnalyzer<'a> {
         if let Some(player) = self.player_by_user_id_mut(e.user_id) {
             player.handle_object_removed();
         } else {
-            error!("Could not lookup player with user id {} in object_removed", e.user_id);
+            error!(
+                "Could not lookup player with user id {} in object_removed",
+                e.user_id
+            );
         }
     }
 
@@ -1872,7 +1929,10 @@ impl<'a> MatchAnalyzer<'a> {
         if let Some(player) = self.player_by_user_id_mut(e.user_id) {
             player.handle_ammo_pack();
         } else {
-            error!("Could not lookup player with user id {} in item_pickup", e.user_id);
+            error!(
+                "Could not lookup player with user id {} in item_pickup",
+                e.user_id
+            );
         }
     }
 
@@ -1959,11 +2019,14 @@ impl<'a> MatchAnalyzer<'a> {
             self.finished_votes.push(old);
         }
         let (steamid, name) = self.resolve_vote_entity(e.initiator);
-        let session = self.vote_sessions.entry(e.voteidx).or_insert_with(|| VoteSummary {
-            voteidx: e.voteidx,
-            tick_start: tick,
-            ..Default::default()
-        });
+        let session = self
+            .vote_sessions
+            .entry(e.voteidx)
+            .or_insert_with(|| VoteSummary {
+                voteidx: e.voteidx,
+                tick_start: tick,
+                ..Default::default()
+            });
         // A fresh `vote_started` (re)initializes the session; keep any
         // already-seen options/ballots only if they belong to the same tick.
         // In practice events arrive in order, so overwrite the header fields.
@@ -2009,10 +2072,7 @@ impl<'a> MatchAnalyzer<'a> {
         session.options = options.into_iter().take(count).collect();
         // Backfill option names on ballots seen before the options event.
         for ballot in &mut session.ballots {
-            ballot.option_name = session
-                .options
-                .get(ballot.option as usize)
-                .cloned();
+            ballot.option_name = session.options.get(ballot.option as usize).cloned();
         }
     }
 
@@ -2064,7 +2124,7 @@ impl<'a> MatchAnalyzer<'a> {
         self.sm_map_announced_tick = None;
     }
 
-    /// Classify a SourceMod progress update: Yes/No options mean a
+    /// Classify a `SourceMod` progress update: Yes/No options mean a
     /// scramble vote, anything else means a map vote.
     fn sm_kind_for_options(options: &[SmVoteOption]) -> &str {
         if options.is_empty() {
@@ -2086,9 +2146,7 @@ impl<'a> MatchAnalyzer<'a> {
         // messages (`15s left`, `14s left`, ...) belong to the same vote.
         let starts_new = match &self.sm_current {
             None => true,
-            Some(cur) => {
-                total == 0 && (cur.total_votes > 0 || !cur.options.is_empty())
-            }
+            Some(cur) => total == 0 && (cur.total_votes > 0 || !cur.options.is_empty()),
         };
         if starts_new {
             self.finish_sm_current();
@@ -2101,9 +2159,7 @@ impl<'a> MatchAnalyzer<'a> {
             // the vote started; nominations persist for the whole map.
             // (~150s at 66 ticks/s; observed gaps are <40s.)
             let tick_u32 = u32::from(tick);
-            let recent = |i: &SmVoteInitiator| {
-                tick_u32.saturating_sub(u32::from(i.tick)) < 10_000
-            };
+            let recent = |i: &SmVoteInitiator| tick_u32.saturating_sub(u32::from(i.tick)) < 10_000;
             let (initiators, nominations) = if kind == "map" {
                 (
                     std::mem::take(&mut self.sm_pending_rtv)
@@ -2155,8 +2211,7 @@ impl<'a> MatchAnalyzer<'a> {
                             .into_iter()
                             .filter(|i| tick_u32.saturating_sub(u32::from(i.tick)) < 10_000),
                     );
-                    cur.nominations
-                        .append(&mut self.sm_pending_nominations);
+                    cur.nominations.append(&mut self.sm_pending_nominations);
                 } else if cur.kind == "scramble" {
                     cur.initiators.extend(
                         std::mem::take(&mut self.sm_pending_scramble)
@@ -2218,8 +2273,7 @@ impl<'a> MatchAnalyzer<'a> {
                         .into_iter()
                         .filter(|i| start.saturating_sub(u32::from(i.tick)) < 10_000),
                 );
-                cur.nominations
-                    .append(&mut self.sm_pending_nominations);
+                cur.nominations.append(&mut self.sm_pending_nominations);
                 return;
             }
             self.sm_map_announced_tick = Some(tick);
@@ -2266,6 +2320,7 @@ impl<'a> MatchAnalyzer<'a> {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn handle_player_hurt(&mut self, hurt: &PlayerHurtEvent) {
         trace!("Player hurt {:?}", hurt);
 
@@ -2320,7 +2375,7 @@ impl<'a> MatchAnalyzer<'a> {
         let attacker_eid = attacker_summary_for_lookup.entity_id;
         let attacker_entity = self.get_player(&attacker_eid);
         let attacker_team = attacker_entity.map(|e| e.team).unwrap_or_default();
-        let attacker_handle = attacker_entity.and_then(|p| p.handle()).unwrap_or_else(|| {
+        let attacker_handle = attacker_entity.and_then(Entity::handle).unwrap_or_else(|| {
             error!("Player missing a handle??");
             INVALID_HANDLE
         });
@@ -2388,21 +2443,21 @@ impl<'a> MatchAnalyzer<'a> {
                     .filter(|(exp, _dist)| exp.projectile.check_hit(&playerbox))
                     .collect::<Vec<_>>();
 
-                if let Some((e, _dist)) = hit_exps.first() {
+                if let Some((hit, _dist)) = hit_exps.first() {
                     trace!(
                         "Hit by explosion! {:?} damage_type:{damage_type:?} effect:{effect:?}  weapon_type:{weapon_type:?}     {hit_exps:?}",
                         format!(
                             "{:?}-{:?}-{:?}",
-                            e.projectile.class_name,
-                            e.projectile.grenade_type,
-                            e.projectile
+                            hit.projectile.class_name,
+                            hit.projectile.grenade_type,
+                            hit.projectile
                                 .model_id
                                 .as_ref()
                                 .and_then(|id| self.models.get(id))
                         )
                     );
 
-                    let mut e = (*hit_exps.first().unwrap().0).clone();
+                    let mut e = (*hit).clone();
                     if self.airblasts.contains(&attacker_handle) {
                         e.projectile.is_reflected = true;
                         e.projectile.owner = attacker_handle;
@@ -2475,7 +2530,7 @@ impl<'a> MatchAnalyzer<'a> {
         };
         let weapon_name = self.weapon_name_from_damage(
             damage_type,
-            Default::default(),
+            EnumSet::new(),
             victim_e,
             attacker_e,
             Some(&hurt_event),
@@ -2546,7 +2601,7 @@ impl<'a> MatchAnalyzer<'a> {
 
         self.tick = *tick;
 
-        let server_tick = server_tick.map(|x| u32::from(x.tick)).unwrap_or(0);
+        let server_tick = server_tick.map_or(0, |x| u32::from(x.tick));
 
         self.server_tick = server_tick;
 
@@ -2576,7 +2631,7 @@ impl<'a> MatchAnalyzer<'a> {
             }
         }
 
-        let t: Vec<_> = self.tick_events.drain(..).collect();
+        let t: Vec<_> = std::mem::take(&mut self.tick_events);
         for e in t {
             match e {
                 Event::Death { death, tick } => {
@@ -2627,8 +2682,7 @@ impl<'a> MatchAnalyzer<'a> {
     /// a live `m_hHealingTarget` is an actively-beaming medigun (only
     /// mediguns carry the prop); time is split per (medic, target) pair.
     fn accumulate_heal_targets(&mut self, delta_ticks: u32) {
-        let seconds =
-            f32::from(u16::try_from(delta_ticks).unwrap_or_default()) * TICK_INTERVAL;
+        let seconds = f32::from(u16::try_from(delta_ticks).unwrap_or_default()) * TICK_INTERVAL;
         let mut beams = Vec::new();
         for (handle, uid) in &self.weapon_owners {
             let Some(entity) = self
@@ -2674,7 +2728,7 @@ impl<'a> MatchAnalyzer<'a> {
                         .user_entities
                         .get(&msg.client)
                         .and_then(|uid| self.user_id_to_steam_id.get(uid).cloned())
-                        .unwrap_or("".to_string()),
+                        .unwrap_or_default(),
                     message: msg.text.to_string(),
                     is_dead: matches!(
                         msg.kind,
@@ -2692,7 +2746,7 @@ impl<'a> MatchAnalyzer<'a> {
                 self.handle_sm_text(msg.text.as_ref());
             }
             e => {
-                trace!("Unhandled user message type {e:?}")
+                trace!("Unhandled user message type {e:?}");
             }
         }
     }
@@ -2712,6 +2766,7 @@ impl MessageHandler for MatchAnalyzer<'_> {
         )
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handle_message(&mut self, message: &Message, tick: DemoTick, parser_state: &ParserState) {
         if tick != self.tick {
             self.handle_tick(&tick, None);
@@ -2723,7 +2778,7 @@ impl MessageHandler for MatchAnalyzer<'_> {
                 self.mutated_colliders.drain(..);
                 self.removed_colliders.drain(..);
 
-                for entity in message.entities.iter() {
+                for entity in &message.entities {
                     self.handle_packet_entity(entity, parser_state);
                 }
                 if !self.mutated_colliders.is_empty() || !self.removed_colliders.is_empty() {
@@ -2751,7 +2806,9 @@ impl MessageHandler for MatchAnalyzer<'_> {
                         let mut player: Option<u32> = None;
                         for p in &e.props {
                             match (p.identifier, &p.value) {
-                                (ANIM_ID, &SendPropValue::Integer(x)) => event = Some(u32::try_from(x).unwrap_or_default()),
+                                (ANIM_ID, &SendPropValue::Integer(x)) => {
+                                    event = Some(u32::try_from(x).unwrap_or_default());
+                                }
                                 (ANIM_PLAYER, &SendPropValue::Integer(x)) => {
                                     player = Some(u32::try_from(x).unwrap_or_default());
                                 }
@@ -2885,9 +2942,8 @@ impl MessageHandler for MatchAnalyzer<'_> {
                             {
                                 // Player ids here are offset by 1
                                 // https://github.com/ValveSoftware/source-sdk-2013/blob/0565403b153dfcde602f6f58d8f4d13483696a13/src/game/server/tf/tf_fx.cpp#L80
-                                player = Some(EntityId::from(
-                                    u32::try_from(x + 1).unwrap_or_default(),
-                                ));
+                                player =
+                                    Some(EntityId::from(u32::try_from(x + 1).unwrap_or_default()));
                             }
                         }
 
@@ -3076,9 +3132,9 @@ impl MessageHandler for MatchAnalyzer<'_> {
                 // GameEvent::TeamPlayRoundStalemate
 
                 // Uninteresting
-                GameEvent::HLTVStatus(_) => {}
-                GameEvent::TeamPlayBroadcastAudio(_) => {}
-                GameEvent::TeamPlayGameOver(_) => {}
+                GameEvent::HLTVStatus(_)
+                | GameEvent::TeamPlayBroadcastAudio(_)
+                | GameEvent::TeamPlayGameOver(_) => {}
 
                 GameEvent::ObjectDestroyed(e) => {
                     if self.round_state != RoundState::Running {
@@ -3158,7 +3214,7 @@ impl MessageHandler for MatchAnalyzer<'_> {
         if table == "userinfo" {
             let _ = self.parse_user_info(
                 index,
-                entry.text.as_ref().map(|s| s.as_ref()),
+                entry.text.as_ref().map(AsRef::as_ref),
                 entry.extra_data.as_ref().map(|data| data.data.clone()),
             );
         } else if table == "modelprecache" {
@@ -3167,8 +3223,7 @@ impl MessageHandler for MatchAnalyzer<'_> {
                 entry
                     .text
                     .as_ref()
-                    .map(|s| s.to_string())
-                    .unwrap_or("".to_string()),
+                    .map_or_else(String::new, ToString::to_string),
             );
         } else if table == "EffectDispatch" {
             self.effects.insert(
@@ -3176,8 +3231,7 @@ impl MessageHandler for MatchAnalyzer<'_> {
                 entry
                     .text
                     .as_ref()
-                    .map(|s| s.to_string())
-                    .unwrap_or("".to_string()),
+                    .map_or_else(String::new, ToString::to_string),
             );
         }
     }
@@ -3308,8 +3362,7 @@ impl MessageHandler for MatchAnalyzer<'_> {
                         ballot.voter_name = name;
                     }
                     if ballot.option_name.is_none() {
-                        ballot.option_name =
-                            session.options.get(ballot.option as usize).cloned();
+                        ballot.option_name = session.options.get(ballot.option as usize).cloned();
                     }
                 }
             }
@@ -3370,7 +3423,6 @@ mod tests {
         let user_info = UserInfo {
             player_info,
             entity_id: EntityId::from(entity_id_val),
-            ..Default::default()
         };
         user_info.encode_to_string_table().unwrap()
     }
@@ -3401,7 +3453,7 @@ mod tests {
         )
     }
 
-    const EXAMPLE_STEAMID: &'static str = "STEAM_0:1:67890";
+    const EXAMPLE_STEAMID: &str = "STEAM_0:1:67890";
 
     #[test]
     fn test_single_player_summary() {
@@ -3489,8 +3541,7 @@ mod tests {
     #[test]
     fn test_parse_sm_triggers() {
         let (name, cur, req) =
-            parse_scramble_trigger("FreaK wants to scramble teams. [1/4 votes required]")
-                .unwrap();
+            parse_scramble_trigger("FreaK wants to scramble teams. [1/4 votes required]").unwrap();
         assert_eq!((name.as_str(), cur, req), ("FreaK", 1, 4));
 
         let (name, cur, req) =
@@ -3727,12 +3778,12 @@ mod tests {
         assert_eq!(parse_capper_entities(&single), vec![2]);
 
         let empty: MaybeUtf8String = "".into();
-        assert!(parse_capper_entities(&empty).is_empty());
+        assert_eq!(parse_capper_entities(&empty), Vec::<u32>::new());
 
         // Name-like content (any byte >= 64) is rejected rather than
         // misresolved as entity slots.
         let names: MaybeUtf8String = "Alice, Bob".into();
-        assert!(parse_capper_entities(&names).is_empty());
+        assert_eq!(parse_capper_entities(&names), Vec::<u32>::new());
     }
 
     #[test]
@@ -4015,7 +4066,10 @@ mod tests {
         assert_eq!(u32::from(cap.tick), 2384);
         assert_eq!(cap.cp_name, "#koth_viaduct_cap");
         assert_eq!(cap.cap_team, 2);
-        assert_eq!(cap.cappers, vec!["STEAM_0:1:600".to_string(), "STEAM_0:1:601".to_string()]);
+        assert_eq!(
+            cap.cappers,
+            vec!["STEAM_0:1:600".to_string(), "STEAM_0:1:601".to_string()]
+        );
         assert!((cap.cap_time - 34.45).abs() < 0.01);
 
         let parser_state = ParserState::new(0, |_| true, false);
@@ -4139,14 +4193,22 @@ mod tests {
         // Two seconds of beam time.
         analyzer.on_tick(133);
         let medic = analyzer.player_summaries.get("STEAM_0:1:800").unwrap();
-        let secs = medic.heal_targets.get("STEAM_0:1:801").copied().unwrap_or(0.0);
+        let secs = medic
+            .heal_targets
+            .get("STEAM_0:1:801")
+            .copied()
+            .unwrap_or(0.0);
         assert!((secs - 133.0 / 66.666_667).abs() < 0.01, "got {secs}");
 
         // Beam dropped: no further accumulation.
         analyzer.entities[100] = None;
         analyzer.on_tick(133);
         let medic = analyzer.player_summaries.get("STEAM_0:1:800").unwrap();
-        let secs = medic.heal_targets.get("STEAM_0:1:801").copied().unwrap_or(0.0);
+        let secs = medic
+            .heal_targets
+            .get("STEAM_0:1:801")
+            .copied()
+            .unwrap_or(0.0);
         assert!((secs - 133.0 / 66.666_667).abs() < 0.01, "got {secs}");
     }
 

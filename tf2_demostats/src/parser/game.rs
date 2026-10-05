@@ -492,7 +492,7 @@ pub enum PlayerCondition {
 
 pub fn update_condition<const OFFSET: usize>(condition: &mut EnumSet<PlayerCondition>, bits: u32) {
     let mask: u128 = 0xffff_ffffu128 << OFFSET;
-    let new_cond = (condition.as_repr() & !mask) | ((bits as u128) << OFFSET);
+    let new_cond = (condition.as_repr() & !mask) | ((u128::from(bits)) << OFFSET);
     *condition = EnumSet::<PlayerCondition>::from_repr(new_cond);
 }
 

@@ -20,7 +20,6 @@ nalgebra = { version = "0.33.3", features = ["alga"] }
 parry3d = "0.18.0"
 alga = "0.9"
 rapier3d = "0.23.1"
-lazy_static = "1.5.1"
 optfield = "0.4.0"
 ustr = "1.1.0"
 tf-demo-parser = "0.7.1"

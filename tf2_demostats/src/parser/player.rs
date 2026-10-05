@@ -1,11 +1,11 @@
 use crate::{
+    Vec3,
     parser::{
         game::{DamageType, Death, RoundState},
         is_false, is_zero,
         stats::Stats,
     },
     schema::{Attribute, Item},
-    Vec3,
 };
 use enumset::EnumSet;
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,7 @@ use tf_demo_parser::demo::{
 };
 use tracing::error;
 
-/// For use with serde's [serialize_with] attribute
+/// For use with serde's [`serialize_with`] attribute
 fn ordered_map<S, K: Ord + Serialize, V: Serialize>(
     value: &HashMap<K, V>,
     serializer: S,
@@ -29,6 +29,9 @@ where
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
+// Flags mirror userinfo/entity state 1:1 and are part of the JSON/proto
+// schema, so they stay as plain bools rather than a bitflag struct.
+#[allow(clippy::struct_excessive_bools)]
 pub struct PlayerSummary {
     pub name: String,
     pub steamid: String,
@@ -123,6 +126,7 @@ pub struct PlayerSummary {
 }
 
 impl PlayerSummary {
+    #[must_use]
     pub fn in_air(&self) -> bool {
         !self.on_ground && !self.in_water
     }
@@ -206,7 +210,7 @@ impl PlayerSummary {
 
     pub fn handle_death(&mut self, round_state: RoundState, flags: EnumSet<Death>) {
         if self.class == Class::Medic && round_state == RoundState::Running {
-            if self.charge == 1.0 {
+            if (self.charge - 1.0).abs() < f32::EPSILON {
                 self.stats.handle_drop();
                 self.class_stats().handle_drop();
             } else if self.charge > 0.95 {
@@ -373,7 +377,7 @@ impl PlayerSummary {
             .get("set_charge_type")
             .and_then(|x| match x {
                 Attribute::Float(float) => Some(float.value),
-                _ => None,
+                Attribute::String(_) => None,
             })
             .unwrap_or(0.0);
 

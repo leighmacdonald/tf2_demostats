@@ -139,7 +139,10 @@ async fn exec() -> Result<()> {
         .with(EnvFilter::from_default_env())
         .init();
     match args.command {
-        Commands::Version => cmd_version().await,
+        Commands::Version => {
+            cmd_version();
+            Ok(())
+        }
         Commands::Parse { schema, demo } => cmd_parse(&schema, demo).await,
         Commands::Voice {
             demo,
@@ -191,7 +194,7 @@ async fn cmd_serve(schema_path: &Path, host: String, port: u16) -> Result<()> {
 }
 
 async fn cmd_parse(schema_path: &Path, demo_paths: Vec<PathBuf>) -> Result<()> {
-    let schema = schema::read(schema_path).await?;
+    let schema = schema::read(schema_path)?;
 
     for mut demo_path in demo_paths {
         let path = demo_path.as_path();
@@ -243,7 +246,8 @@ async fn cmd_voice(
         let dir = match &out_dir {
             Some(dir) => dir.clone(),
             None => demo_path
-                .parent().map_or_else(|| PathBuf::from("."), Path::to_path_buf),
+                .parent()
+                .map_or_else(|| PathBuf::from("."), Path::to_path_buf),
         };
         let stem = demo_path
             .file_stem()
@@ -372,10 +376,8 @@ async fn cmd_transcribe(
     Ok(transcript_path)
 }
 
-async fn cmd_version() -> Result<()> {
+fn cmd_version() {
     println!("tf2-demostats {}", env!("CARGO_PKG_VERSION"));
-
-    Ok(())
 }
 
 async fn cmd_schema(api_key: String, schema_path: &Path) -> Result<()> {

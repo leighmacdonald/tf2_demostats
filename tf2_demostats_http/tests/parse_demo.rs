@@ -13,7 +13,6 @@ use tf2_demostats_http::service::DemoServiceImpl;
 
 async fn parse_fixture() -> tf2_demostats::parser::DemoOutput {
     let schema = tf2_demostats::schema::read(std::path::Path::new("../schema.json"))
-        .await
         .expect("schema.json should load");
     let bytes = tokio::fs::read("../test.dem")
         .await
@@ -31,8 +30,14 @@ async fn convert_matches_json_api() {
     let header = &proto.header.as_option().expect("header set");
     assert_eq!(header.map, json["map"].as_str().unwrap());
     assert_eq!(header.game, json["game"].as_str().unwrap());
-    assert_eq!(header.ticks, json["ticks"].as_u64().unwrap() as u32);
-    assert_eq!(header.frames, json["frames"].as_u64().unwrap() as u32);
+    assert_eq!(
+        header.ticks,
+        u32::try_from(json["ticks"].as_u64().unwrap()).unwrap()
+    );
+    assert_eq!(
+        header.frames,
+        u32::try_from(json["frames"].as_u64().unwrap()).unwrap()
+    );
 
     let summary = proto.summary.as_option().expect("summary set");
     assert_eq!(
@@ -60,25 +65,30 @@ async fn convert_matches_json_api() {
             let stats = player.stats.as_option().expect("stats set");
             assert_eq!(
                 stats.kills,
-                player_json["kills"].as_u64().unwrap_or(0) as u32
+                u32::try_from(player_json["kills"].as_u64().unwrap_or(0)).unwrap()
             );
             assert_eq!(
                 stats.deaths,
-                player_json["deaths"].as_u64().unwrap_or(0) as u32
+                u32::try_from(player_json["deaths"].as_u64().unwrap_or(0)).unwrap()
             );
             assert_eq!(
                 stats.damage,
-                player_json["damage"].as_u64().unwrap_or(0) as u32
+                u32::try_from(player_json["damage"].as_u64().unwrap_or(0)).unwrap()
             );
             assert_eq!(
                 player.weapons.len(),
-                player_json["weapons"].as_object().map_or(0, serde_json::Map::len)
+                player_json["weapons"]
+                    .as_object()
+                    .map_or(0, serde_json::Map::len)
             );
         }
     }
 
     for (msg, msg_json) in summary.chat.iter().zip(json["chat"].as_array().unwrap()) {
-        assert_eq!(msg.tick, msg_json["tick"].as_u64().unwrap() as u32);
+        assert_eq!(
+            msg.tick,
+            u32::try_from(msg_json["tick"].as_u64().unwrap()).unwrap()
+        );
         assert_eq!(msg.message, msg_json["message"].as_str().unwrap());
     }
 }
@@ -87,7 +97,6 @@ async fn convert_matches_json_api() {
 #[tokio::test]
 async fn handler_parses_demo() {
     let schema = tf2_demostats::schema::read(std::path::Path::new("../schema.json"))
-        .await
         .expect("schema.json should load");
     let svc = DemoServiceImpl::new(Arc::new(schema));
     let demo = tokio::fs::read("../test.dem")
@@ -115,7 +124,10 @@ async fn handler_parses_demo() {
     let demo = reply.demo.as_option().expect("demo set");
     assert_eq!(demo.filename, "test.dem");
     let summary = demo.summary.as_option().expect("summary set");
-    assert_ne!(summary.rounds, [] as [tf2_demostats_http::demostats::v1::RoundSummary; 0]);
+    assert_ne!(
+        summary.rounds,
+        [] as [tf2_demostats_http::demostats::v1::RoundSummary; 0]
+    );
     assert!(
         summary.rounds.iter().any(|r| !r.players.is_empty()),
         "at least one round has players"
@@ -126,7 +138,6 @@ async fn handler_parses_demo() {
 #[tokio::test]
 async fn handler_rejects_bad_uploads() {
     let schema = tf2_demostats::schema::read(std::path::Path::new("../schema.json"))
-        .await
         .expect("schema.json should load");
     let svc = DemoServiceImpl::new(Arc::new(schema));
 

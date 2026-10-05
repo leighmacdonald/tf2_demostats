@@ -5,9 +5,9 @@
 //! These conversions are total and infallible.
 
 use crate::demostats::v1 as pb;
-use tf2_demostats::parser::{summarizer, DemoOutput};
 use tf_demo_parser::demo::header::Header;
 use tf_demo_parser::demo::parser::gamestateanalyser::{Class, Team};
+use tf2_demostats::parser::{DemoOutput, summarizer};
 
 #[must_use]
 pub fn team(value: &Team) -> pb::Team {

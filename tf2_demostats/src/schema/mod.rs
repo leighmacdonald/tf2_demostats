@@ -214,6 +214,7 @@ pub struct ItemRaw {
 }
 
 impl ItemRaw {
+    #[must_use]
     pub fn into_item(self) -> Item {
         Item {
             name: self.name,
@@ -268,7 +269,7 @@ impl Schema {
     pub fn make_prefab(&self, s: &str) -> ItemRaw {
         let mut out = ItemRaw::default();
         if let Some(op) = self.prefabs.get(s) {
-            for p in op.prefab.iter().flat_map(|s| s.split(" ")) {
+            for p in op.prefab.iter().flat_map(|s| s.split(' ')) {
                 let pi = self.make_prefab(p);
                 out.merge(pi.clone());
             }
@@ -291,6 +292,11 @@ struct ApiResponse<T> {
     result: T,
 }
 
+/// Download the TF2 item schema from the Steam Web API and write it to `path`.
+///
+/// # Errors
+///
+/// Returns an error on network/JSON failures or if the file cannot be written.
 pub async fn download_schema(api_key: String, path: &Path) -> Result<()> {
     let client = Client::default();
     let schema_url =
@@ -305,16 +311,23 @@ pub async fn download_schema(api_key: String, path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn read(schema_path: &Path) -> Result<Schema> {
-    let schema_body = match schema_path.exists() {
-        true => std::fs::read_to_string(schema_path)
-            .map_err(|e| format!("Error {e}: While reading {schema_path:?}"))?,
-        false => return Err("Schema file not found".into()),
+/// Read and parse a schema file from disk.
+///
+/// # Errors
+///
+/// Returns an error if the file does not exist, cannot be read, or is not
+/// valid schema data.
+pub fn read(schema_path: &Path) -> Result<Schema> {
+    let schema_body = if schema_path.exists() {
+        std::fs::read_to_string(schema_path)
+            .map_err(|e| format!("Error {e}: While reading {}", schema_path.display()))?
+    } else {
+        return Err("Schema file not found".into());
     };
     let game_file = keyvalues_serde::from_str_raw::<ItemsGameFile>(&schema_body)?;
 
     let mut schema = Schema {
-        items: Default::default(),
+        items: HashMap::new(),
         prefabs: game_file.prefabs,
     };
 
@@ -330,7 +343,7 @@ pub async fn read(schema_path: &Path) -> Result<Schema> {
         }
 
         let mut new_i = def.clone();
-        for p in i.prefab.iter().flat_map(|s| s.split(" ")) {
+        for p in i.prefab.iter().flat_map(|s| s.split(' ')) {
             new_i.merge(schema.make_prefab(p));
         }
         new_i.merge(i);

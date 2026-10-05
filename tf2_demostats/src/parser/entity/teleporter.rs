@@ -1,20 +1,19 @@
 use crate::{
-    convert_vec,
+    Vec3, convert_vec,
     parser::{
         entity::{Entity, EntityClass, SENTRY_BOX},
-        props::*,
+        props::{BUILDER, ORIGIN, UPGRADE_LEVEL},
         summarizer::MatchAnalyzerView,
     },
-    Vec3,
 };
 use parry3d::shape::SharedShape;
 use std::any::Any;
 use tf_demo_parser::{
+    ParserState,
     demo::{
         message::packetentities::{EntityId, PacketEntity},
         sendprop::SendPropValue,
     },
-    ParserState,
 };
 use tracing::error;
 
@@ -45,7 +44,9 @@ impl Teleporter {
                         patch.owner_entity = Some(*eid);
                     }
                 }
-                (UPGRADE_LEVEL, &SendPropValue::Integer(l)) => patch.level = Some(u32::try_from(l).unwrap_or_default()),
+                (UPGRADE_LEVEL, &SendPropValue::Integer(l)) => {
+                    patch.level = Some(u32::try_from(l).unwrap_or_default());
+                }
                 _ => {}
             }
         }
