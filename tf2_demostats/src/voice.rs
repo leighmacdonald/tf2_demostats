@@ -7,12 +7,12 @@ use std::{
 use ogg::writing::{PacketWriteEndInfo, PacketWriter};
 use steam_audio_codec::{SteamVoiceData, SteamVoiceDecoder};
 use tf_demo_parser::{
+    Demo, DemoParser, MessageType, ParserState,
     demo::{
         data::DemoTick,
-        message::{voice::VoiceInitMessage, Message},
+        message::{Message, voice::VoiceInitMessage},
         parser::MessageHandler,
     },
-    Demo, DemoParser, MessageType, ParserState,
 };
 use tracing::warn;
 
@@ -247,7 +247,7 @@ fn opus_head(input_sample_rate: u32) -> Vec<u8> {
 
 /// OpusTags header with a single encoder vendor tag.
 fn opus_tags() -> Vec<u8> {
-    let vendor = b"tf2_demostats";
+    let vendor = b"tf2-demostats";
     let mut tags = Vec::with_capacity(8 + 4 + vendor.len() + 4);
     tags.extend_from_slice(b"OpusTags");
     tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());

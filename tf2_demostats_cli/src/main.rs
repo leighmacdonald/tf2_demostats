@@ -69,10 +69,18 @@ enum Commands {
         #[arg(long, default_value = tf2_demostats::transcribe::DEFAULT_MODEL, env = "TRANSCRIBE_MODEL", help = "Transcription model ID on the server")]
         transcription_model: String,
 
-        #[arg(long, env = "TRANSCRIBE_API_KEY", help = "Bearer token for the transcription server (if required)")]
+        #[arg(
+            long,
+            env = "TRANSCRIBE_API_KEY",
+            help = "Bearer token for the transcription server (if required)"
+        )]
         transcription_api_key: Option<String>,
 
-        #[arg(long, default_value = "en", help = "Transcription language (empty = auto-detect)")]
+        #[arg(
+            long,
+            default_value = "en",
+            help = "Transcription language (empty = auto-detect)"
+        )]
         language: String,
     },
     #[command(about = "Update the local schema cache")]
@@ -262,8 +270,7 @@ async fn cmd_voice(
             None
         };
         let mixed_ref = mixed.as_ref().map(|(s, r)| (s.as_slice(), *r));
-        let written =
-            voice::write_opus_files(&output, mixed_ref, &dir, stem, !only_mix, !no_mix)?;
+        let written = voice::write_opus_files(&output, mixed_ref, &dir, stem, !only_mix, !no_mix)?;
         let frames: usize = output.players.values().map(|p| p.frames.len()).sum();
         info!(
             "Wrote {} opus file(s) for {} ({} speakers, {} frames, {} chunks, {} skipped)",
@@ -368,7 +375,7 @@ async fn cmd_transcribe(
 }
 
 async fn cmd_version() -> Result<()> {
-    println!("tf2_demostats {}", env!("CARGO_PKG_VERSION"));
+    println!("tf2-demostats {}", env!("CARGO_PKG_VERSION"));
 
     Ok(())
 }

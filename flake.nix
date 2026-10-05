@@ -68,7 +68,7 @@
               description = "Demo parser for Team Fortress 2";
               homepage = "https://github.com/leighmacdonald/tf2_demostats";
               license = licenses.mit;
-              mainProgram = "tf2_demostats";
+              mainProgram = "tf2-demostats";
               platforms = systems;
             };
           };
@@ -86,14 +86,14 @@
               toolchain =
                 with fenix.packages.${system};
                 combine [
-                  (stable.withComponents [
+                  (latest.withComponents [
                     "cargo"
                     "clippy"
                     "rustc"
                     "rustfmt"
                   ])
-                  targets.x86_64-unknown-linux-gnu.stable.rust-std
-                  targets.x86_64-pc-windows-gnu.stable.rust-std
+                  targets.x86_64-unknown-linux-gnu.latest.rust-std
+                  targets.x86_64-pc-windows-gnu.latest.rust-std
                 ];
               # Only the static thread archives, symlinked into one dir.
               # (The packages also ship .dll.a import libs, which must NOT be
