@@ -43,6 +43,8 @@ message Header {
 message DemoSummary {
   repeated RoundSummary rounds = 1;
   repeated ChatMessage chat = 2;
+  repeated VoteSummary votes = 3;
+  repeated SourceModVote sourcemod_votes = 4;
 }
 
 message ChatMessage {
@@ -157,4 +159,74 @@ enum Class {
   CLASS_PYRO = 7;
   CLASS_SPY = 8;
   CLASS_ENGINEER = 9;
+}
+
+message VoteBallot {
+  uint32 tick = 1;
+  uint32 voter_entity = 2;
+  // steamid of the voter, if resolved.
+  optional string voter = 3;
+  optional string voter_name = 4;
+  // 0-based option index (vote_cast.vote_option).
+  uint32 option = 5;
+  optional string option_name = 6;
+}
+
+message VoteSummary {
+  uint32 voteidx = 1;
+  uint32 tick_start = 2;
+  optional uint32 tick_end = 3;
+  string issue = 4;
+  string param1 = 5;
+  uint32 team = 6;
+  // Raw initiator client/entity index; 99 means the server.
+  optional uint32 initiator_entity = 7;
+  // steamid of the initiator, if resolved.
+  optional string initiator = 8;
+  optional string initiator_name = 9;
+  repeated string options = 10;
+  repeated VoteBallot ballots = 11;
+  // Last-seen per-option tallies from vote_changed.
+  repeated uint32 counts = 12;
+  optional uint32 potential_votes = 13;
+  // True = passed, false = failed, absent = no vote_passed/vote_failed seen.
+  optional bool passed = 14;
+  optional string result_details = 15;
+  optional string result_param1 = 16;
+}
+
+message SmVoteInitiator {
+  string name = 1;
+  optional string steamid = 2;
+  uint32 tick = 3;
+  uint32 current = 4;
+  uint32 required = 5;
+}
+
+message SmNomination {
+  string name = 1;
+  optional string steamid = 2;
+  string map = 3;
+  uint32 tick = 4;
+}
+
+message SmVoteOption {
+  string name = 1;
+  uint32 votes = 2;
+}
+
+message SourceModVote {
+  // "scramble" or "map".
+  string kind = 1;
+  uint32 tick_start = 2;
+  optional uint32 tick_end = 3;
+  repeated SmVoteInitiator initiators = 4;
+  repeated SmNomination nominations = 5;
+  uint32 total_votes = 6;
+  uint32 potential_votes = 7;
+  // Aggregate tallies only; individual ballots are not broadcast.
+  repeated SmVoteOption options = 8;
+  // "Scrambling the teams due to vote." or the winning map name.
+  optional string result = 9;
+  optional bool passed = 10;
 }

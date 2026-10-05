@@ -5,9 +5,9 @@
 //! These conversions are total and infallible.
 
 use crate::demostats::v1 as pb;
+use tf2_demostats::parser::{summarizer, DemoOutput};
 use tf_demo_parser::demo::header::Header;
 use tf_demo_parser::demo::parser::gamestateanalyser::{Class, Team};
-use tf2_demostats::parser::{DemoOutput, summarizer};
 
 pub fn team(value: &Team) -> pb::Team {
     match value {
@@ -162,6 +162,85 @@ pub fn chat(value: &summarizer::ChatMessage) -> pb::ChatMessage {
     }
 }
 
+pub fn vote_ballot(value: &summarizer::VoteBallot) -> pb::VoteBallot {
+    pb::VoteBallot {
+        tick: u32::from(value.tick),
+        voter_entity: value.voter_entity,
+        voter: value.voter.clone(),
+        voter_name: value.voter_name.clone(),
+        option: u32::from(value.option),
+        option_name: value.option_name.clone(),
+        ..Default::default()
+    }
+}
+
+pub fn vote(value: &summarizer::VoteSummary) -> pb::VoteSummary {
+    pb::VoteSummary {
+        voteidx: value.voteidx,
+        tick_start: u32::from(value.tick_start),
+        tick_end: value.tick_end.map(u32::from),
+        issue: value.issue.clone(),
+        param1: value.param1.clone(),
+        team: u32::from(value.team),
+        initiator_entity: value.initiator_entity,
+        initiator: value.initiator.clone(),
+        initiator_name: value.initiator_name.clone(),
+        options: value.options.clone(),
+        ballots: value.ballots.iter().map(vote_ballot).collect(),
+        counts: value.counts.clone(),
+        potential_votes: value.potential_votes,
+        passed: value.passed,
+        result_details: value.result_details.clone(),
+        result_param1: value.result_param1.clone(),
+        ..Default::default()
+    }
+}
+
+pub fn sm_initiator(value: &summarizer::SmVoteInitiator) -> pb::SmVoteInitiator {
+    pb::SmVoteInitiator {
+        name: value.name.clone(),
+        steamid: value.steamid.clone(),
+        tick: u32::from(value.tick),
+        current: value.current,
+        required: value.required,
+        ..Default::default()
+    }
+}
+
+pub fn sm_nomination(value: &summarizer::SmNomination) -> pb::SmNomination {
+    pb::SmNomination {
+        name: value.name.clone(),
+        steamid: value.steamid.clone(),
+        map: value.map.clone(),
+        tick: u32::from(value.tick),
+        ..Default::default()
+    }
+}
+
+pub fn sm_option(value: &summarizer::SmVoteOption) -> pb::SmVoteOption {
+    pb::SmVoteOption {
+        name: value.name.clone(),
+        votes: value.votes,
+        ..Default::default()
+    }
+}
+
+pub fn sm_vote(value: &summarizer::SourceModVote) -> pb::SourceModVote {
+    pb::SourceModVote {
+        kind: value.kind.clone(),
+        tick_start: u32::from(value.tick_start),
+        tick_end: value.tick_end.map(u32::from),
+        initiators: value.initiators.iter().map(sm_initiator).collect(),
+        nominations: value.nominations.iter().map(sm_nomination).collect(),
+        total_votes: value.total_votes,
+        potential_votes: value.potential_votes,
+        options: value.options.iter().map(sm_option).collect(),
+        result: value.result.clone(),
+        passed: value.passed,
+        ..Default::default()
+    }
+}
+
 pub fn demo_output(value: &DemoOutput) -> pb::DemoOutput {
     pb::DemoOutput {
         filename: value.filename.clone().unwrap_or_default(),
@@ -169,6 +248,8 @@ pub fn demo_output(value: &DemoOutput) -> pb::DemoOutput {
         summary: buffa::MessageField::some(pb::DemoSummary {
             rounds: value.summary.rounds.iter().map(round).collect(),
             chat: value.summary.chat.iter().map(chat).collect(),
+            votes: value.summary.votes.iter().map(vote).collect(),
+            sourcemod_votes: value.summary.sourcemod_votes.iter().map(sm_vote).collect(),
             ..Default::default()
         }),
         ..Default::default()

@@ -32,7 +32,8 @@ use tf_demo_parser::{
         data::{DemoTick, MaybeUtf8String, UserInfo},
         gameevent_gen::{
             PlayerDeathEvent, PlayerHurtEvent, TeamPlayCaptureBlockedEvent,
-            TeamPlayPointCapturedEvent,
+            TeamPlayPointCapturedEvent, VoteCastEvent, VoteChangedEvent, VoteFailedEvent,
+            VoteOptionsEvent, VotePassedEvent, VoteStartedEvent,
         },
         gamevent::GameEvent,
         message::{
@@ -58,6 +59,117 @@ use tracing::{debug, error, span::EnteredSpan, trace, warn};
 pub struct DemoSummary {
     pub rounds: Vec<RoundSummary>,
     pub chat: Vec<ChatMessage>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub votes: Vec<VoteSummary>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub sourcemod_votes: Vec<SourceModVote>,
+}
+
+/// One ballot cast in a native TF2 vote (`vote_cast` game event).
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct VoteBallot {
+    pub tick: DemoTick,
+    pub voter_entity: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voter: Option<String>, // steamid
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voter_name: Option<String>,
+    /// 0-based option index (`vote_cast.vote_option`).
+    pub option: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub option_name: Option<String>,
+}
+
+/// A native TF2 vote, correlated by `voteidx` across
+/// `vote_started` / `vote_options` / `vote_cast` / `vote_changed` /
+/// `vote_passed` / `vote_failed` / `vote_ended` game events.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct VoteSummary {
+    pub voteidx: u32,
+    pub tick_start: DemoTick,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tick_end: Option<DemoTick>,
+    pub issue: String,
+    #[serde(skip_serializing_if = "String::is_empty", default)]
+    pub param1: String,
+    pub team: u8,
+    /// Raw initiator client/entity index (`vote_started.initiator`).
+    /// `99` means the server; then `initiator`/`initiator_name` are `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initiator_entity: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initiator: Option<String>, // steamid
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initiator_name: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub options: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub ballots: Vec<VoteBallot>,
+    /// Last-seen per-option tallies from `vote_changed`.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub counts: Vec<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub potential_votes: Option<u32>,
+    /// `Some(true)` = passed, `Some(false)` = failed, `None` = no
+    /// `vote_passed`/`vote_failed` event seen (ongoing or truncated).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_details: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_param1: Option<String>,
+}
+
+/// One `"<name> wants to scramble teams"` / `"wants to rock the vote"`
+/// trigger that feeds a SourceMod vote.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct SmVoteInitiator {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub steamid: Option<String>,
+    pub tick: DemoTick,
+    pub current: u32,
+    pub required: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct SmNomination {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub steamid: Option<String>,
+    pub map: String,
+    pub tick: DemoTick,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct SmVoteOption {
+    pub name: String,
+    pub votes: u32,
+}
+
+/// A SourceMod vote reconstructed from `Text` user messages
+/// (`PrintTalk` triggers/results, `PrintCenter` progress).
+/// Individual ballots are not broadcast, so only aggregate `options`
+/// tallies are available (unlike native votes, which list every voter).
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct SourceModVote {
+    /// `"scramble"` or `"map"`.
+    pub kind: String,
+    pub tick_start: DemoTick,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tick_end: Option<DemoTick>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub initiators: Vec<SmVoteInitiator>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub nominations: Vec<SmNomination>,
+    pub total_votes: u32,
+    pub potential_votes: u32,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub options: Vec<SmVoteOption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passed: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -149,6 +261,16 @@ pub struct MatchAnalyzer<'a> {
 
     weapon_class_ids: HashSet<ClassId>,
     projectile_class_ids: HashSet<ClassId>,
+
+    vote_sessions: HashMap<u32, VoteSummary>, // voteidx -> in-progress native vote
+    finished_votes: Vec<VoteSummary>, // closed native votes (voteidx reuse across maps)
+
+    sm_votes: Vec<SourceModVote>,
+    sm_current: Option<SourceModVote>,
+    sm_pending_scramble: Vec<SmVoteInitiator>,
+    sm_pending_rtv: Vec<SmVoteInitiator>,
+    sm_pending_nominations: Vec<SmNomination>,
+    sm_map_announced_tick: Option<DemoTick>,
 }
 
 pub struct MatchAnalyzerView<'a> {
@@ -276,6 +398,95 @@ pub struct RoundSummary {
     pub losers: Vec<String>, // steamids
 }
 
+/// Resolve a vote client/entity index to `(steamid, name)`.
+/// `99` (and `0`) mean the server, which has no player identity.
+fn resolve_vote_entity(
+    entity: u32,
+    user_entities: &HashMap<EntityId, UserId>,
+    user_id_to_steam_id: &HashMap<UserId, String>,
+    player_summaries: &HashMap<String, PlayerSummary>,
+) -> (Option<String>, Option<String>) {
+    if entity == 99 || entity == 0 {
+        return (None, None);
+    }
+    let eid = EntityId::from(entity);
+    let steamid = user_entities
+        .get(&eid)
+        .and_then(|uid| user_id_to_steam_id.get(uid))
+        .cloned();
+    let name = steamid
+        .as_ref()
+        .and_then(|sid| player_summaries.get(sid))
+        .map(|p| p.name.clone());
+    (steamid, name)
+}
+
+/// `"FreaK wants to scramble teams. [1/4 votes required]"`
+/// -> `("FreaK", 1, 4)`.
+fn parse_scramble_trigger(text: &str) -> Option<(String, u32, u32)> {
+    let (name, rest) = text.split_once(" wants to scramble teams. [")?;
+    let rest = rest.strip_suffix(" votes required]")?;
+    let (cur, req) = rest.split_once('/')?;
+    Some((name.to_string(), cur.parse().ok()?, req.parse().ok()?))
+}
+
+/// `"[SM] moriya wants to rock the vote. (1 votes, 11 required)"`
+/// -> `("moriya", 1, 11)`.
+fn parse_rtv_trigger(text: &str) -> Option<(String, u32, u32)> {
+    let text = text.strip_prefix("[SM] ")?.strip_suffix(')')?;
+    let (name, rest) = text.split_once(" wants to rock the vote. (")?;
+    let (cur, req) = rest.split_once(" votes, ")?;
+    let req = req.strip_suffix(" required")?;
+    Some((name.to_string(), cur.parse().ok()?, req.parse().ok()?))
+}
+
+/// `"[SM] SchwanzusLongus has nominated cp_process_final."`
+/// -> `("SchwanzusLongus", "cp_process_final")`.
+fn parse_nomination(text: &str) -> Option<(String, String)> {
+    let text = text.strip_prefix("[SM] ")?.strip_suffix('.')?;
+    let (name, map) = text.split_once(" has nominated ")?;
+    Some((name.to_string(), map.to_string()))
+}
+
+/// `"Votes: 12/21, 9s left\n1. cp_process_final: (9)\n2. ..."`
+/// -> `(12, 21, 9, options)`.
+fn parse_vote_progress(text: &str) -> Option<(u32, u32, u32, Vec<SmVoteOption>)> {
+    let mut lines = text.lines();
+    let head = lines.next()?;
+    let head = head.strip_prefix("Votes: ")?;
+    let (counts, secs) = head.split_once(", ")?;
+    let secs = secs.strip_suffix("s left")?;
+    let (total, potential) = counts.split_once('/')?;
+    let mut options = Vec::new();
+    for line in lines {
+        // `"1. cp_process_final: (9)"`
+        let (_, rest) = line.split_once(". ")?;
+        let (name, count) = rest.rsplit_once(": (")?;
+        let count = count.strip_suffix(')')?;
+        options.push(SmVoteOption {
+            name: name.to_string(),
+            votes: count.parse().ok()?,
+        });
+    }
+    Some((
+        total.parse().ok()?,
+        potential.parse().ok()?,
+        secs.parse().ok()?,
+        options,
+    ))
+}
+
+/// `"[SM] Map voting has finished. The next map will be koth_harvest_final.
+/// (Received 61% of 13 votes)"` -> `("koth_harvest_final", 61, 13)`.
+fn parse_map_finished(text: &str) -> Option<(String, u32, u32)> {
+    let text = text.strip_prefix("[SM] Map voting has finished. The next map will be ")?;
+    let (map, rest) = text.split_once(". (Received ")?;
+    let rest = rest.strip_suffix(')')?;
+    let (pct, votes) = rest.split_once("% of ")?;
+    let votes = votes.strip_suffix(" votes")?;
+    Some((map.to_string(), pct.parse().ok()?, votes.parse().ok()?))
+}
+
 impl<'a> MatchAnalyzer<'a> {
     pub fn new(schema: &'a Schema) -> Self {
         Self {
@@ -312,6 +523,14 @@ impl<'a> MatchAnalyzer<'a> {
             removed_colliders: Vec::with_capacity(ENTITY_COUNT),
             projectile_class_ids: Default::default(),
             weapon_class_ids: Default::default(),
+            vote_sessions: Default::default(),
+            finished_votes: Default::default(),
+            sm_votes: Default::default(),
+            sm_current: Default::default(),
+            sm_pending_scramble: Default::default(),
+            sm_pending_rtv: Default::default(),
+            sm_pending_nominations: Default::default(),
+            sm_map_announced_tick: Default::default(),
         }
     }
 
@@ -1169,6 +1388,357 @@ impl<'a> MatchAnalyzer<'a> {
         }
     }
 
+    /// Resolve a vote client/entity index to `(steamid, name)`.
+    /// `99` (and `0`) mean the server, which has no player identity.
+    fn resolve_vote_entity(&self, entity: u32) -> (Option<String>, Option<String>) {
+        resolve_vote_entity(
+            entity,
+            &self.user_entities,
+            &self.user_id_to_steam_id,
+            &self.player_summaries,
+        )
+    }
+
+    fn steamid_for_name(&self, name: &str) -> Option<String> {
+        self.player_summaries
+            .values()
+            .find(|p| p.name == name)
+            .map(|p| p.steamid.clone())
+    }
+
+    fn vote_session_mut(&mut self, voteidx: u32) -> &mut VoteSummary {
+        let tick = self.tick;
+        self.vote_sessions
+            .entry(voteidx)
+            .or_insert_with(|| VoteSummary {
+                voteidx,
+                tick_start: tick,
+                ..Default::default()
+            })
+    }
+
+    pub fn handle_vote_started(&mut self, e: &VoteStartedEvent) {
+        trace!("Vote started {e:?}");
+        let tick = self.tick;
+        // `voteidx` is a per-server counter that restarts across map changes
+        // within one STV demo; a fresh `vote_started` for an already-closed
+        // session starts a new vote rather than merging into the old one.
+        if self
+            .vote_sessions
+            .get(&e.voteidx)
+            .is_some_and(|s| s.passed.is_some() || s.tick_end.is_some())
+            && let Some(old) = self.vote_sessions.remove(&e.voteidx)
+        {
+            self.finished_votes.push(old);
+        }
+        let (steamid, name) = self.resolve_vote_entity(e.initiator);
+        let session = self.vote_sessions.entry(e.voteidx).or_insert_with(|| VoteSummary {
+            voteidx: e.voteidx,
+            tick_start: tick,
+            ..Default::default()
+        });
+        // A fresh `vote_started` (re)initializes the session; keep any
+        // already-seen options/ballots only if they belong to the same tick.
+        // In practice events arrive in order, so overwrite the header fields.
+        session.tick_start = tick;
+        session.issue = e.issue.to_string();
+        session.param1 = e.param_1.to_string();
+        session.team = e.team;
+        session.initiator_entity = (e.initiator != 99 && e.initiator != 0).then_some(e.initiator);
+        session.initiator = steamid;
+        session.initiator_name = name;
+    }
+
+    pub fn handle_vote_cast(&mut self, e: &VoteCastEvent) {
+        trace!("Vote cast {e:?}");
+        let tick = self.tick;
+        let (steamid, name) = self.resolve_vote_entity(e.entity_id);
+        let option_name = self
+            .vote_sessions
+            .get(&e.voteidx)
+            .and_then(|s| s.options.get(e.vote_option as usize).cloned());
+        let ballot = VoteBallot {
+            tick,
+            voter_entity: e.entity_id,
+            voter: steamid,
+            voter_name: name,
+            option: e.vote_option,
+            option_name,
+        };
+        self.vote_session_mut(e.voteidx).ballots.push(ballot);
+    }
+
+    pub fn handle_vote_options(&mut self, e: &VoteOptionsEvent) {
+        trace!("Vote options {e:?}");
+        let options = [
+            e.option_1.to_string(),
+            e.option_2.to_string(),
+            e.option_3.to_string(),
+            e.option_4.to_string(),
+            e.option_5.to_string(),
+        ];
+        let count = usize::min(e.count as usize, options.len());
+        let session = self.vote_session_mut(e.voteidx);
+        session.options = options.into_iter().take(count).collect();
+        // Backfill option names on ballots seen before the options event.
+        for ballot in &mut session.ballots {
+            ballot.option_name = session
+                .options
+                .get(ballot.option as usize)
+                .cloned();
+        }
+    }
+
+    pub fn handle_vote_changed(&mut self, e: &VoteChangedEvent) {
+        trace!("Vote changed {e:?}");
+        let session = self.vote_session_mut(e.voteidx);
+        session.counts = vec![
+            u32::from(e.vote_option_1),
+            u32::from(e.vote_option_2),
+            u32::from(e.vote_option_3),
+            u32::from(e.vote_option_4),
+            u32::from(e.vote_option_5),
+        ];
+        session.potential_votes = Some(u32::from(e.potential_votes));
+    }
+
+    pub fn handle_vote_passed(&mut self, e: &VotePassedEvent) {
+        trace!("Vote passed {e:?}");
+        let tick = self.tick;
+        let session = self.vote_session_mut(e.voteidx);
+        session.passed = Some(true);
+        session.result_details = Some(e.details.to_string());
+        session.result_param1 = Some(e.param_1.to_string());
+        session.tick_end = Some(tick);
+    }
+
+    pub fn handle_vote_failed(&mut self, e: &VoteFailedEvent) {
+        trace!("Vote failed {e:?}");
+        let tick = self.tick;
+        let session = self.vote_session_mut(e.voteidx);
+        session.passed = Some(false);
+        session.tick_end = Some(tick);
+    }
+
+    pub fn handle_vote_ended(&mut self) {
+        trace!("Vote ended");
+        let tick = self.tick;
+        for session in self.vote_sessions.values_mut() {
+            if session.tick_end.is_none() {
+                session.tick_end = Some(tick);
+            }
+        }
+    }
+
+    fn finish_sm_current(&mut self) {
+        if let Some(vote) = self.sm_current.take() {
+            self.sm_votes.push(vote);
+        }
+        self.sm_map_announced_tick = None;
+    }
+
+    /// Classify a SourceMod progress update: Yes/No options mean a
+    /// scramble vote, anything else means a map vote.
+    fn sm_kind_for_options(options: &[SmVoteOption]) -> &str {
+        if options.is_empty() {
+            return "unknown";
+        }
+        let is_yes_no = options.len() <= 2
+            && options
+                .iter()
+                .all(|o| o.name.eq_ignore_ascii_case("yes") || o.name.eq_ignore_ascii_case("no"));
+        if is_yes_no { "scramble" } else { "map" }
+    }
+
+    fn handle_sm_progress(&mut self, total: u32, potential: u32, options: Vec<SmVoteOption>) {
+        let tick = self.tick;
+        let announced_is_map = self.sm_map_announced_tick.is_some();
+
+        // A `0/N` update starts a new vote only if the current vote already
+        // accumulated votes/options (a reset). Repeated `0/N` countdown
+        // messages (`15s left`, `14s left`, ...) belong to the same vote.
+        let starts_new = match &self.sm_current {
+            None => true,
+            Some(cur) => {
+                total == 0 && (cur.total_votes > 0 || !cur.options.is_empty())
+            }
+        };
+        if starts_new {
+            self.finish_sm_current();
+            let kind = if announced_is_map {
+                "map".to_string()
+            } else {
+                Self::sm_kind_for_options(&options).to_string()
+            };
+            // Triggers are only relevant if they happened shortly before
+            // the vote started; nominations persist for the whole map.
+            // (~150s at 66 ticks/s; observed gaps are <40s.)
+            let tick_u32 = u32::from(tick);
+            let recent = |i: &SmVoteInitiator| {
+                tick_u32.saturating_sub(u32::from(i.tick)) < 10_000
+            };
+            let (initiators, nominations) = if kind == "map" {
+                (
+                    std::mem::take(&mut self.sm_pending_rtv)
+                        .into_iter()
+                        .filter(recent)
+                        .collect(),
+                    std::mem::take(&mut self.sm_pending_nominations),
+                )
+            } else if kind == "scramble" {
+                (
+                    std::mem::take(&mut self.sm_pending_scramble)
+                        .into_iter()
+                        .filter(recent)
+                        .collect(),
+                    Vec::new(),
+                )
+            } else {
+                // Kind still unknown (bare `0/N` countdown): attach nothing
+                // yet; pending triggers are claimed once options classify
+                // the vote in the update path below.
+                (Vec::new(), Vec::new())
+            };
+            self.sm_current = Some(SourceModVote {
+                kind,
+                tick_start: tick,
+                tick_end: None,
+                initiators,
+                nominations,
+                total_votes: total,
+                potential_votes: potential,
+                options,
+                result: None,
+                passed: None,
+            });
+            self.sm_map_announced_tick = None;
+            return;
+        }
+
+        if let Some(cur) = self.sm_current.as_mut() {
+            cur.total_votes = total;
+            cur.potential_votes = potential;
+            cur.options = options;
+            if cur.kind == "unknown" {
+                cur.kind = Self::sm_kind_for_options(&cur.options).to_string();
+                let tick_u32 = u32::from(cur.tick_start);
+                if cur.kind == "map" {
+                    cur.initiators.extend(
+                        std::mem::take(&mut self.sm_pending_rtv)
+                            .into_iter()
+                            .filter(|i| tick_u32.saturating_sub(u32::from(i.tick)) < 10_000),
+                    );
+                    cur.nominations
+                        .append(&mut self.sm_pending_nominations);
+                } else if cur.kind == "scramble" {
+                    cur.initiators.extend(
+                        std::mem::take(&mut self.sm_pending_scramble)
+                            .into_iter()
+                            .filter(|i| tick_u32.saturating_sub(u32::from(i.tick)) < 10_000),
+                    );
+                }
+            }
+        }
+    }
+
+    fn handle_sm_text(&mut self, text: &str) {
+        let tick = self.tick;
+        if let Some((name, current, required)) = parse_scramble_trigger(text) {
+            let steamid = self.steamid_for_name(&name);
+            self.sm_pending_scramble.push(SmVoteInitiator {
+                name,
+                steamid,
+                tick,
+                current,
+                required,
+            });
+            return;
+        }
+        if let Some((name, current, required)) = parse_rtv_trigger(text) {
+            let steamid = self.steamid_for_name(&name);
+            self.sm_pending_rtv.push(SmVoteInitiator {
+                name,
+                steamid,
+                tick,
+                current,
+                required,
+            });
+            return;
+        }
+        if let Some((name, map)) = parse_nomination(text) {
+            let steamid = self.steamid_for_name(&name);
+            self.sm_pending_nominations.push(SmNomination {
+                name,
+                steamid,
+                map,
+                tick,
+            });
+            return;
+        }
+        if text == "[SM] Voting for next map has started." {
+            // The announcement usually shares a tick with the first
+            // `Votes: 0/N` progress message; message order within the tick
+            // is not guaranteed, so reclassify an in-progress vote started
+            // on the same tick.
+            if let Some(cur) = self.sm_current.as_mut()
+                && cur.kind == "unknown"
+                && cur.tick_start == tick
+            {
+                cur.kind = "map".to_string();
+                let start = u32::from(cur.tick_start);
+                cur.initiators.extend(
+                    std::mem::take(&mut self.sm_pending_rtv)
+                        .into_iter()
+                        .filter(|i| start.saturating_sub(u32::from(i.tick)) < 10_000),
+                );
+                cur.nominations
+                    .append(&mut self.sm_pending_nominations);
+                return;
+            }
+            self.sm_map_announced_tick = Some(tick);
+            return;
+        }
+        if text == "Scrambling the teams due to vote." {
+            if let Some(cur) = self.sm_current.as_mut() {
+                cur.tick_end = Some(tick);
+                cur.result = Some(text.to_string());
+                cur.passed = Some(true);
+                if cur.kind == "unknown" {
+                    cur.kind = "scramble".to_string();
+                }
+            } else if let Some(last) = self.sm_votes.last_mut()
+                && last.tick_end.is_none()
+            {
+                last.tick_end = Some(tick);
+                last.result = Some(text.to_string());
+                last.passed = Some(true);
+            }
+            self.finish_sm_current();
+            return;
+        }
+        if let Some((map, _pct, _votes)) = parse_map_finished(text) {
+            if let Some(cur) = self.sm_current.as_mut() {
+                cur.tick_end = Some(tick);
+                cur.result = Some(map);
+                cur.passed = Some(true);
+                if cur.kind == "unknown" {
+                    cur.kind = "map".to_string();
+                }
+            } else if let Some(last) = self.sm_votes.last_mut()
+                && last.tick_end.is_none()
+            {
+                last.tick_end = Some(tick);
+                last.result = Some(map);
+                last.passed = Some(true);
+            }
+            self.finish_sm_current();
+            return;
+        }
+        if let Some((total, potential, _secs, options)) = parse_vote_progress(text) {
+            self.handle_sm_progress(total, potential, options);
+        }
+    }
+
     pub fn handle_player_hurt(&mut self, hurt: &PlayerHurtEvent) {
         trace!("Player hurt {:?}", hurt);
 
@@ -1538,6 +2108,9 @@ impl<'a> MatchAnalyzer<'a> {
                     is_name_change: matches!(msg.kind, ChatMessageKind::NameChange),
                 });
             }
+            UserMessage::Text(msg) => {
+                self.handle_sm_text(msg.text.as_ref());
+            }
             e => {
                 trace!("Unhandled user message type {e:?}")
             }
@@ -1792,6 +2365,14 @@ impl MessageHandler for MatchAnalyzer<'_> {
 
                 GameEvent::TeamPlayPointCaptured(cap) => self.handle_point_captured(cap),
                 GameEvent::TeamPlayCaptureBlocked(block) => self.handle_capture_blocked(block),
+
+                GameEvent::VoteStarted(e) => self.handle_vote_started(e),
+                GameEvent::VoteCast(e) => self.handle_vote_cast(e),
+                GameEvent::VoteOptions(e) => self.handle_vote_options(e),
+                GameEvent::VoteChanged(e) => self.handle_vote_changed(e),
+                GameEvent::VotePassed(e) => self.handle_vote_passed(e),
+                GameEvent::VoteFailed(e) => self.handle_vote_failed(e),
+                GameEvent::VoteEnded(_) => self.handle_vote_ended(),
 
                 GameEvent::TeamPlayWinPanel(e) => {
                     for entity_id_val in [e.player_1, e.player_2, e.player_3] {
@@ -2087,9 +2668,56 @@ impl MessageHandler for MatchAnalyzer<'_> {
             }
         }
 
+        if let Some(vote) = self.sm_current.take() {
+            self.sm_votes.push(vote);
+        }
+        // Backfill initiator/voter identities: userinfo string-table updates
+        // can arrive after the vote events that reference them, so anything
+        // unresolved at event time gets one more chance against the final
+        // entity -> user -> steamid mappings.
+        {
+            let user_entities = &self.user_entities;
+            let uid_to_sid = &self.user_id_to_steam_id;
+            let summaries = &self.player_summaries;
+            for session in self.vote_sessions.values_mut() {
+                if session.initiator.is_none()
+                    && let Some(entity) = session.initiator_entity
+                {
+                    let (steamid, name) =
+                        resolve_vote_entity(entity, user_entities, uid_to_sid, summaries);
+                    session.initiator = steamid;
+                    session.initiator_name = name;
+                }
+                for ballot in &mut session.ballots {
+                    if ballot.voter.is_none() {
+                        let (steamid, name) = resolve_vote_entity(
+                            ballot.voter_entity,
+                            user_entities,
+                            uid_to_sid,
+                            summaries,
+                        );
+                        ballot.voter = steamid;
+                        ballot.voter_name = name;
+                    }
+                    if ballot.option_name.is_none() {
+                        ballot.option_name =
+                            session.options.get(ballot.option as usize).cloned();
+                    }
+                }
+            }
+        }
+        let mut votes: Vec<VoteSummary> = self
+            .finished_votes
+            .into_iter()
+            .chain(self.vote_sessions.into_values())
+            .collect();
+        votes.sort_by_key(|v| (u32::from(v.tick_start), v.voteidx));
+
         DemoSummary {
             rounds: self.rounds,
             chat: self.chat,
+            votes,
+            sourcemod_votes: self.sm_votes,
         }
     }
 }
@@ -2246,5 +2874,263 @@ mod tests {
             summary.rounds[0].players[0].entity_id,
             EntityId::from(57u32)
         );
+    }
+
+    #[test]
+    fn test_parse_sm_triggers() {
+        let (name, cur, req) =
+            parse_scramble_trigger("FreaK wants to scramble teams. [1/4 votes required]")
+                .unwrap();
+        assert_eq!((name.as_str(), cur, req), ("FreaK", 1, 4));
+
+        let (name, cur, req) =
+            parse_rtv_trigger("[SM] moriya wants to rock the vote. (1 votes, 11 required)")
+                .unwrap();
+        assert_eq!((name.as_str(), cur, req), ("moriya", 1, 11));
+
+        let (name, map) =
+            parse_nomination("[SM] SchwanzusLongus has nominated cp_process_final.").unwrap();
+        assert_eq!(name, "SchwanzusLongus");
+        assert_eq!(map, "cp_process_final");
+
+        assert!(parse_scramble_trigger("random chat").is_none());
+        assert!(parse_rtv_trigger("random chat").is_none());
+        assert!(parse_nomination("random chat").is_none());
+    }
+
+    #[test]
+    fn test_parse_sm_progress_and_result() {
+        let (total, potential, secs, options) =
+            parse_vote_progress("Votes: 12/21, 9s left\n1. cp_process_final: (9)\n2. pl_phoenix: (2)\n3. cp_snakewater_final1: (1)").unwrap();
+        assert_eq!((total, potential, secs), (12, 21, 9));
+        assert_eq!(options.len(), 3);
+        assert_eq!(options[0].name, "cp_process_final");
+        assert_eq!(options[0].votes, 9);
+
+        let (total, potential, secs, options) =
+            parse_vote_progress("Votes: 0/18, 20s left").unwrap();
+        assert_eq!((total, potential, secs), (0, 18, 20));
+        assert!(options.is_empty());
+
+        let (map, pct, votes) = parse_map_finished(
+            "[SM] Map voting has finished. The next map will be koth_harvest_final. (Received 61% of 13 votes)",
+        )
+        .unwrap();
+        assert_eq!(map, "koth_harvest_final");
+        assert_eq!((pct, votes), (61, 13));
+    }
+
+    #[test]
+    fn test_native_vote_session() {
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+
+        analyzer.tick = DemoTick::from(100);
+        analyzer.handle_vote_started(&VoteStartedEvent {
+            issue: "Kick".into(),
+            param_1: "76561198000000000".into(),
+            team: 0,
+            initiator: 1,
+            voteidx: 0,
+        });
+        analyzer.handle_vote_options(&VoteOptionsEvent {
+            count: 2,
+            option_1: "Yes".into(),
+            option_2: "No".into(),
+            option_3: "".into(),
+            option_4: "".into(),
+            option_5: "".into(),
+            voteidx: 0,
+        });
+        analyzer.tick = DemoTick::from(110);
+        analyzer.handle_vote_cast(&VoteCastEvent {
+            vote_option: 0,
+            team: 0,
+            entity_id: 1,
+            voteidx: 0,
+        });
+        analyzer.handle_vote_changed(&VoteChangedEvent {
+            vote_option_1: 1,
+            vote_option_2: 0,
+            vote_option_3: 0,
+            vote_option_4: 0,
+            vote_option_5: 0,
+            potential_votes: 12,
+            voteidx: 0,
+        });
+        analyzer.tick = DemoTick::from(200);
+        analyzer.handle_vote_passed(&VotePassedEvent {
+            details: "#TF_vote_passed_kick".into(),
+            param_1: "76561198000000000".into(),
+            team: 0,
+            voteidx: 0,
+        });
+
+        let session = analyzer.vote_sessions.get(&0).unwrap();
+        assert_eq!(session.issue, "Kick");
+        assert_eq!(u32::from(session.tick_start), 100);
+        assert_eq!(session.tick_end, Some(DemoTick::from(200)));
+        assert_eq!(session.options, vec!["Yes".to_string(), "No".to_string()]);
+        assert_eq!(session.ballots.len(), 1);
+        assert_eq!(session.ballots[0].option, 0);
+        assert_eq!(session.ballots[0].option_name.as_deref(), Some("Yes"));
+        assert_eq!(session.counts, vec![1, 0, 0, 0, 0]);
+        assert_eq!(session.potential_votes, Some(12));
+        assert_eq!(session.passed, Some(true));
+
+        // Server-initiated votes have no player identity.
+        analyzer.tick = DemoTick::from(300);
+        analyzer.handle_vote_started(&VoteStartedEvent {
+            issue: "ChangeMap".into(),
+            param_1: "cp_badlands".into(),
+            team: 0,
+            initiator: 99,
+            voteidx: 1,
+        });
+        let session = analyzer.vote_sessions.get(&1).unwrap();
+        assert_eq!(session.initiator, None);
+        assert_eq!(session.initiator_entity, None);
+    }
+
+    #[test]
+    fn test_native_voteidx_reuse_across_maps() {
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+
+        // First vote with voteidx 0, closed by a pass.
+        analyzer.tick = DemoTick::from(100);
+        analyzer.handle_vote_started(&VoteStartedEvent {
+            issue: "Kick".into(),
+            param_1: "A".into(),
+            team: 0,
+            initiator: 99,
+            voteidx: 0,
+        });
+        analyzer.tick = DemoTick::from(200);
+        analyzer.handle_vote_passed(&VotePassedEvent {
+            details: "x".into(),
+            param_1: "A".into(),
+            team: 0,
+            voteidx: 0,
+        });
+
+        // Counter restarts on the next map: same voteidx must not merge.
+        analyzer.tick = DemoTick::from(50_000);
+        analyzer.handle_vote_started(&VoteStartedEvent {
+            issue: "Scramble".into(),
+            param_1: "".into(),
+            team: 0,
+            initiator: 99,
+            voteidx: 0,
+        });
+
+        let parser_state = ParserState::new(0, |_| true, false);
+        let summary = analyzer.into_output(&parser_state);
+        assert_eq!(summary.votes.len(), 2);
+        assert_eq!(summary.votes[0].issue, "Kick");
+        assert_eq!(summary.votes[0].passed, Some(true));
+        assert_eq!(summary.votes[1].issue, "Scramble");
+        assert_eq!(u32::from(summary.votes[1].tick_start), 50_000);
+    }
+
+    #[test]
+    fn test_native_vote_failed_and_ended() {
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+
+        // Failed vote: ballots for both options, then vote_failed.
+        analyzer.tick = DemoTick::from(1000);
+        analyzer.handle_vote_started(&VoteStartedEvent {
+            issue: "Kick".into(),
+            param_1: "B".into(),
+            team: 0,
+            initiator: 99,
+            voteidx: 7,
+        });
+        analyzer.handle_vote_options(&VoteOptionsEvent {
+            count: 2,
+            option_1: "Yes".into(),
+            option_2: "No".into(),
+            option_3: "".into(),
+            option_4: "".into(),
+            option_5: "".into(),
+            voteidx: 7,
+        });
+        analyzer.tick = DemoTick::from(1010);
+        for (entity, option) in [(3u32, 0u8), (5u32, 1u8), (9u32, 1u8)] {
+            analyzer.handle_vote_cast(&VoteCastEvent {
+                vote_option: option,
+                team: 0,
+                entity_id: entity,
+                voteidx: 7,
+            });
+        }
+        analyzer.handle_vote_changed(&VoteChangedEvent {
+            vote_option_1: 1,
+            vote_option_2: 2,
+            vote_option_3: 0,
+            vote_option_4: 0,
+            vote_option_5: 0,
+            potential_votes: 10,
+            voteidx: 7,
+        });
+        analyzer.tick = DemoTick::from(1200);
+        analyzer.handle_vote_failed(&VoteFailedEvent {
+            team: 0,
+            voteidx: 7,
+        });
+        analyzer.handle_vote_ended();
+
+        let parser_state = ParserState::new(0, |_| true, false);
+        let summary = analyzer.into_output(&parser_state);
+        assert_eq!(summary.votes.len(), 1);
+        let v = &summary.votes[0];
+        assert_eq!(v.voteidx, 7);
+        assert_eq!(u32::from(v.tick_start), 1000);
+        assert_eq!(v.tick_end, Some(DemoTick::from(1200)));
+        assert_eq!(v.passed, Some(false));
+        assert_eq!(v.ballots.len(), 3);
+        assert_eq!(v.ballots[1].voter_entity, 5);
+        assert_eq!(v.ballots[1].option, 1);
+        assert_eq!(v.ballots[1].option_name.as_deref(), Some("No"));
+        assert_eq!(v.counts, vec![1, 2, 0, 0, 0]);
+        assert_eq!(v.potential_votes, Some(10));
+
+        // JSON round-trip: every field must serialize.
+        let json = serde_json::to_string(&summary).unwrap();
+        assert!(json.contains("\"issue\":\"Kick\""));
+        assert!(json.contains("\"passed\":false"));
+        let back: DemoSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.votes.len(), 1);
+        assert_eq!(back.votes[0].ballots.len(), 3);
+    }
+
+    #[test]
+    fn test_sm_scramble_vote_flow() {
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+        // Seed a player so the initiator name resolves.
+        let parser_state = ParserState::new(0, |_| true, false);
+        let entry = create_mock_user_info("FreaK", EXAMPLE_STEAMID, 2, 6);
+        analyzer.handle_string_entry("userinfo", 0, &entry, &parser_state);
+
+        analyzer.tick = DemoTick::from(9968);
+        analyzer.handle_sm_text("FreaK wants to scramble teams. [1/1 votes required]");
+        analyzer.tick = DemoTick::from(11203);
+        analyzer.handle_sm_text("Votes: 0/18, 20s left");
+        analyzer.handle_sm_text("Votes: 1/18, 19s left\n1. Yes: (1)");
+        analyzer.tick = DemoTick::from(12553);
+        analyzer.handle_sm_text("Scrambling the teams due to vote.");
+
+        assert!(analyzer.sm_current.is_none());
+        assert_eq!(analyzer.sm_votes.len(), 1);
+        let v = &analyzer.sm_votes[0];
+        assert_eq!(v.kind, "scramble");
+        assert_eq!(u32::from(v.tick_start), 11203);
+        assert_eq!(v.tick_end, Some(DemoTick::from(12553)));
+        assert_eq!(v.initiators.len(), 1);
+        assert_eq!(v.initiators[0].steamid.as_deref(), Some(EXAMPLE_STEAMID));
+        assert_eq!(v.total_votes, 1);
+        assert_eq!(v.passed, Some(true));
     }
 }
