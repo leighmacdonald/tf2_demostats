@@ -2,6 +2,8 @@ pub mod convert;
 pub mod service;
 
 // Generated `demostats.v1` message + service types (see `build.rs`).
+// Machine output, not ours: silence lints for the whole blob.
+// (The attribute propagates through `include!` to the expanded items.)
 connectrpc::include_generated!();
 
 use std::{path::Path, sync::Arc};

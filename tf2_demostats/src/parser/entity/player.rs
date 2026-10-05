@@ -97,20 +97,20 @@ impl Player {
         for prop in packet.props(parser_state) {
             match (prop.identifier, &prop.value) {
                 (KILLS, &SendPropValue::Integer(val)) => {
-                    patch.scoreboard_kills = Some(val as u32);
+                    patch.scoreboard_kills = Some(u32::try_from(val).unwrap_or_default());
                 }
                 (KILL_ASSISTS, &SendPropValue::Integer(val)) => {
                     // PoV demos include multiple different copies of
                     // this field -- maybe per round stats? We want
                     // the larger one.
                     // TODO
-                    patch.scoreboard_assists = Some(val as u32);
+                    patch.scoreboard_assists = Some(u32::try_from(val).unwrap_or_default());
                 }
                 (DEATHS, &SendPropValue::Integer(val)) => {
-                    patch.scoreboard_deaths = Some(val as u32);
+                    patch.scoreboard_deaths = Some(u32::try_from(val).unwrap_or_default());
                 }
                 (FLAGS, &SendPropValue::Integer(val)) => {
-                    patch.flags = Some(EnumSet::<Flags>::try_from_repr(val as u32).unwrap_or_else(
+                    patch.flags = Some(EnumSet::<Flags>::try_from_repr(u32::try_from(val).unwrap_or_default()).unwrap_or_else(
                         || {
                             error!("Unknown player flags: {}", val);
                             EnumSet::<Flags>::new()
@@ -118,24 +118,24 @@ impl Player {
                     ));
                 }
                 (CLASS, &SendPropValue::Integer(val)) => {
-                    let Ok(class) = Class::try_from(val as u8) else {
+                    let Ok(class) = Class::try_from(u8::try_from(val).unwrap_or_default()) else {
                         error!("Unknown classid {val}");
                         continue;
                     };
                     patch.class = Some(class);
                 }
                 (TEAM, &SendPropValue::Integer(val)) => {
-                    let Ok(team) = Team::try_from(val as u8) else {
+                    let Ok(team) = Team::try_from(u8::try_from(val).unwrap_or_default()) else {
                         error!("Unknown team id {val}");
                         continue;
                     };
                     patch.team = Some(team);
                 }
                 (HEALTH, &SendPropValue::Integer(val)) => {
-                    patch.health = Some(val as u32);
+                    patch.health = Some(u32::try_from(val).unwrap_or_default());
                 }
                 (SIM_TIME, &SendPropValue::Integer(val)) => {
-                    patch.sim_time = Some(val as u32);
+                    patch.sim_time = Some(u32::try_from(val).unwrap_or_default());
                 }
 
                 (ORIGIN_XY, &SendPropValue::VectorXY(vec)) => {
@@ -146,16 +146,16 @@ impl Player {
                 (EYE_Y, &SendPropValue::Float(y)) => patch.eye_y = Some(y),
 
                 (HANDLE, &SendPropValue::Integer(h)) => {
-                    patch.handle = Some(h as u32);
+                    patch.handle = Some(u32::try_from(h).unwrap_or_default());
                 }
                 (COND_SOURCE, &SendPropValue::Integer(x)) => {
-                    patch.condition_source = Some(x as u32)
+                    patch.condition_source = Some(u32::try_from(x).unwrap_or_default())
                 }
 
-                (COND_0, &SendPropValue::Integer(x)) => patch.condition_bits[0] = Some(x as u32),
-                (COND_1, &SendPropValue::Integer(x)) => patch.condition_bits[1] = Some(x as u32),
-                (COND_2, &SendPropValue::Integer(x)) => patch.condition_bits[2] = Some(x as u32),
-                (COND_3, &SendPropValue::Integer(x)) => patch.condition_bits[3] = Some(x as u32),
+                (COND_0, &SendPropValue::Integer(x)) => patch.condition_bits[0] = Some(u32::try_from(x).unwrap_or_default()),
+                (COND_1, &SendPropValue::Integer(x)) => patch.condition_bits[1] = Some(u32::try_from(x).unwrap_or_default()),
+                (COND_2, &SendPropValue::Integer(x)) => patch.condition_bits[2] = Some(u32::try_from(x).unwrap_or_default()),
+                (COND_3, &SendPropValue::Integer(x)) => patch.condition_bits[3] = Some(u32::try_from(x).unwrap_or_default()),
 
                 (COND_BITS, &SendPropValue::Integer(x)) => {
                     if x == 0 || x == 2048 {
@@ -166,40 +166,40 @@ impl Player {
                 }
 
                 (ACTIVE_WEAPON_HANDLE, &SendPropValue::Integer(x)) => {
-                    patch.active_weapon_handle = Some(x as u32);
+                    patch.active_weapon_handle = Some(u32::try_from(x).unwrap_or_default());
                 }
 
                 (WEP_0, &SendPropValue::Integer(x)) => {
-                    patch.weapon_handles[0] = Some(x as u32);
+                    patch.weapon_handles[0] = Some(u32::try_from(x).unwrap_or_default());
                 }
                 (WEP_1, &SendPropValue::Integer(x)) => {
-                    patch.weapon_handles[1] = Some(x as u32);
+                    patch.weapon_handles[1] = Some(u32::try_from(x).unwrap_or_default());
                 }
                 (WEP_2, &SendPropValue::Integer(x)) => {
-                    patch.weapon_handles[2] = Some(x as u32);
+                    patch.weapon_handles[2] = Some(u32::try_from(x).unwrap_or_default());
                 }
                 (WEP_3, &SendPropValue::Integer(x)) => {
-                    patch.weapon_handles[3] = Some(x as u32);
+                    patch.weapon_handles[3] = Some(u32::try_from(x).unwrap_or_default());
                 }
                 (WEP_4, &SendPropValue::Integer(x)) => {
-                    patch.weapon_handles[4] = Some(x as u32);
+                    patch.weapon_handles[4] = Some(u32::try_from(x).unwrap_or_default());
                 }
                 (WEP_5, &SendPropValue::Integer(x)) => {
-                    patch.weapon_handles[5] = Some(x as u32);
+                    patch.weapon_handles[5] = Some(u32::try_from(x).unwrap_or_default());
                 }
                 (WEP_6, &SendPropValue::Integer(x)) => {
-                    patch.weapon_handles[6] = Some(x as u32);
+                    patch.weapon_handles[6] = Some(u32::try_from(x).unwrap_or_default());
                 }
 
-                (NUM_COSMETICS, &SendPropValue::Integer(n)) => patch.num_cosmetics = Some(n as u32),
-                (COSMETIC_0, &SendPropValue::Integer(x)) => patch.cosmetics[0] = Some(x as u32),
-                (COSMETIC_1, &SendPropValue::Integer(x)) => patch.cosmetics[1] = Some(x as u32),
-                (COSMETIC_2, &SendPropValue::Integer(x)) => patch.cosmetics[2] = Some(x as u32),
-                (COSMETIC_3, &SendPropValue::Integer(x)) => patch.cosmetics[3] = Some(x as u32),
-                (COSMETIC_4, &SendPropValue::Integer(x)) => patch.cosmetics[4] = Some(x as u32),
-                (COSMETIC_5, &SendPropValue::Integer(x)) => patch.cosmetics[5] = Some(x as u32),
-                (COSMETIC_6, &SendPropValue::Integer(x)) => patch.cosmetics[6] = Some(x as u32),
-                (COSMETIC_7, &SendPropValue::Integer(x)) => patch.cosmetics[7] = Some(x as u32),
+                (NUM_COSMETICS, &SendPropValue::Integer(n)) => patch.num_cosmetics = Some(u32::try_from(n).unwrap_or_default()),
+                (COSMETIC_0, &SendPropValue::Integer(x)) => patch.cosmetics[0] = Some(u32::try_from(x).unwrap_or_default()),
+                (COSMETIC_1, &SendPropValue::Integer(x)) => patch.cosmetics[1] = Some(u32::try_from(x).unwrap_or_default()),
+                (COSMETIC_2, &SendPropValue::Integer(x)) => patch.cosmetics[2] = Some(u32::try_from(x).unwrap_or_default()),
+                (COSMETIC_3, &SendPropValue::Integer(x)) => patch.cosmetics[3] = Some(u32::try_from(x).unwrap_or_default()),
+                (COSMETIC_4, &SendPropValue::Integer(x)) => patch.cosmetics[4] = Some(u32::try_from(x).unwrap_or_default()),
+                (COSMETIC_5, &SendPropValue::Integer(x)) => patch.cosmetics[5] = Some(u32::try_from(x).unwrap_or_default()),
+                (COSMETIC_6, &SendPropValue::Integer(x)) => patch.cosmetics[6] = Some(u32::try_from(x).unwrap_or_default()),
+                (COSMETIC_7, &SendPropValue::Integer(x)) => patch.cosmetics[7] = Some(u32::try_from(x).unwrap_or_default()),
 
                 _ => {
                     trace!("player unused prop {:?}: {prop:?}", packet.entity_index);

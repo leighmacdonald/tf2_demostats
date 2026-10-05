@@ -17,10 +17,12 @@ pub struct DemoServiceImpl {
 }
 
 impl DemoServiceImpl {
+    #[must_use]
     pub fn new(schema: Arc<tf2_demostats::schema::Schema>) -> Self {
         Self { schema }
     }
 
+    #[must_use]
     pub fn router(schema: Arc<tf2_demostats::schema::Schema>) -> Router {
         Router::new()
             .add_service(Arc::new(Self::new(schema)))
@@ -49,7 +51,7 @@ impl DemoService for DemoServiceImpl {
         if req.demo.len() > MAX_DEMO_BYTES {
             return Err(ConnectError::new(
                 ErrorCode::InvalidArgument,
-                format!("demo exceeds {} bytes", MAX_DEMO_BYTES),
+                format!("demo exceeds {MAX_DEMO_BYTES} bytes"),
             ));
         }
 

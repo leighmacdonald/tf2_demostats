@@ -7,12 +7,12 @@ use std::{
 use ogg::writing::{PacketWriteEndInfo, PacketWriter};
 use steam_audio_codec::{SteamVoiceData, SteamVoiceDecoder};
 use tf_demo_parser::{
-    Demo, DemoParser, MessageType, ParserState,
     demo::{
         data::DemoTick,
-        message::{Message, voice::VoiceInitMessage},
+        message::{voice::VoiceInitMessage, Message},
         parser::MessageHandler,
     },
+    Demo, DemoParser, MessageType, ParserState,
 };
 use tracing::warn;
 
@@ -181,7 +181,8 @@ pub fn downmix(output: &VoiceOutput) -> Vec<i16> {
     for track in output.players.values() {
         for (i, sample) in track.iter().enumerate() {
             let sum = i32::from(mixed[i]) + i32::from(*sample);
-            mixed[i] = sum.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+            mixed[i] = i16::try_from(sum.clamp(i32::from(i16::MIN), i32::from(i16::MAX)))
+                .unwrap_or_default();
         }
     }
     mixed
@@ -229,7 +230,7 @@ pub fn write_opus_files(
 /// Ogg stream serial derived from the speaker (each file is its own stream,
 /// so uniqueness across files is not required).
 fn stream_serial(steam_id: u64) -> u32 {
-    (steam_id & 0xffff_ffff) as u32 | 1
+    u32::try_from(steam_id & 0xffff_ffff).unwrap_or_default() | 1
 }
 
 /// 19-byte OpusHead header (RFC 7845): mono, mapping family 0.
@@ -250,7 +251,7 @@ fn opus_tags() -> Vec<u8> {
     let vendor = b"tf2-demostats";
     let mut tags = Vec::with_capacity(8 + 4 + vendor.len() + 4);
     tags.extend_from_slice(b"OpusTags");
-    tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+    tags.extend_from_slice(&(u32::try_from(vendor.len()).unwrap_or_default()).to_le_bytes());
     tags.extend_from_slice(vendor);
     tags.extend_from_slice(&0u32.to_le_bytes()); // no user comments
     tags
@@ -493,9 +494,12 @@ impl VoiceOutput {
             };
 
             let anchor = capture.anchor_tick.unwrap_or(chunk.tick);
-            let global_pos = (f64::from(chunk.tick.saturating_sub(anchor))
-                * chunk.sample_rate.max(1) as f64
-                * capture.interval_per_tick) as usize;
+            let global_pos = usize::try_from(
+                f64::from(chunk.tick.saturating_sub(anchor))
+                    * f64::from(chunk.sample_rate.max(1))
+                    * capture.interval_per_tick,
+            )
+            .unwrap_or_default();
             let track = output.players.entry(chunk.steam_id).or_default();
             let pad = placement_pad(global_pos, count, track.len());
             track.extend(std::iter::repeat_n(0, pad));
@@ -735,7 +739,7 @@ mod tests {
     /// Wrap raw Opus frames in a steam `OpusPlc` packet (len + blob).
     fn plc_packet(entries: &[u8]) -> Vec<u8> {
         let mut p = vec![6]; // OpusPlc
-        p.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        p.extend_from_slice(&(u16::try_from(entries.len()).unwrap_or_default()).to_le_bytes());
         p.extend_from_slice(entries);
         p
     }
@@ -743,7 +747,7 @@ mod tests {
     /// One inner PLC entry: len + seq + frame bytes.
     fn plc_entry(frame: &[u8], seq: u16) -> Vec<u8> {
         let mut e = Vec::new();
-        e.extend_from_slice(&(frame.len() as u16).to_le_bytes());
+        e.extend_from_slice(&(u16::try_from(frame.len()).unwrap_or_default()).to_le_bytes());
         e.extend_from_slice(&seq.to_le_bytes());
         e.extend_from_slice(frame);
         e

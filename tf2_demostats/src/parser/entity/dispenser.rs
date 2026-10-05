@@ -39,13 +39,13 @@ impl Dispenser {
             match (prop.identifier, &prop.value) {
                 (ORIGIN, &SendPropValue::Vector(o)) => patch.origin = Some(convert_vec(o)),
                 (BUILDER, &SendPropValue::Integer(b)) => {
-                    let h = b as u32;
+                    let h = u32::try_from(b).unwrap_or_default();
                     patch.owner = Some(h);
                     if let Some(eid) = game.entity_handles.get(&h) {
                         patch.owner_entity = Some(*eid);
                     }
                 }
-                (UPGRADE_LEVEL, &SendPropValue::Integer(l)) => patch.level = Some(l as u32),
+                (UPGRADE_LEVEL, &SendPropValue::Integer(l)) => patch.level = Some(u32::try_from(l).unwrap_or_default()),
                 _ => {}
             }
         }

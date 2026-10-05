@@ -25,13 +25,13 @@ impl Shield {
         for prop in packet.props(parser_state) {
             match (prop.identifier, &prop.value) {
                 (SELF_HANDLE, &SendPropValue::Integer(h)) => {
-                    patch.handle = Some(h as u32);
+                    patch.handle = Some(u32::try_from(h).unwrap_or_default());
                 }
                 (OWNER, &SendPropValue::Integer(h)) => {
-                    patch.owner = Some(h as u32);
+                    patch.owner = Some(u32::try_from(h).unwrap_or_default());
                 }
                 (ITEM_DEFINITION, &SendPropValue::Integer(id)) => {
-                    patch.schema_id = Some(id as u32);
+                    patch.schema_id = Some(u32::try_from(id).unwrap_or_default());
                 }
                 _ => {}
             }

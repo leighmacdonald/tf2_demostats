@@ -52,13 +52,13 @@ impl Weapon {
                     patch.charge_released = Some(b == 1)
                 }
                 (MEDIGUN_HEALING_TARGET, &SendPropValue::Integer(h)) => {
-                    patch.healing_target = Some(h as u32)
+                    patch.healing_target = Some(u32::try_from(h).unwrap_or_default())
                 }
-                (SELF_HANDLE, &SendPropValue::Integer(h)) => patch.handle = Some(h as u32),
-                (ITEM_DEFINITION, &SendPropValue::Integer(x)) => patch.schema_id = Some(x as u32),
-                (MODEL, &SendPropValue::Integer(x)) => patch.model_id = Some(x as u32),
-                (WEAPON_OWNER, &SendPropValue::Integer(x)) => patch.owner = Some(x as u32),
-                (RESET_PARITY, &SendPropValue::Integer(x)) => patch.reset_parity = Some(x as u32),
+                (SELF_HANDLE, &SendPropValue::Integer(h)) => patch.handle = Some(u32::try_from(h).unwrap_or_default()),
+                (ITEM_DEFINITION, &SendPropValue::Integer(x)) => patch.schema_id = Some(u32::try_from(x).unwrap_or_default()),
+                (MODEL, &SendPropValue::Integer(x)) => patch.model_id = Some(u32::try_from(x).unwrap_or_default()),
+                (WEAPON_OWNER, &SendPropValue::Integer(x)) => patch.owner = Some(u32::try_from(x).unwrap_or_default()),
+                (RESET_PARITY, &SendPropValue::Integer(x)) => patch.reset_parity = Some(u32::try_from(x).unwrap_or_default()),
 
                 _ => {
                     trace!(

@@ -72,7 +72,7 @@ async fn convert_matches_json_api() {
             );
             assert_eq!(
                 player.weapons.len(),
-                player_json["weapons"].as_object().map_or(0, |m| m.len())
+                player_json["weapons"].as_object().map_or(0, serde_json::Map::len)
             );
         }
     }
@@ -115,7 +115,7 @@ async fn handler_parses_demo() {
     let demo = reply.demo.as_option().expect("demo set");
     assert_eq!(demo.filename, "test.dem");
     let summary = demo.summary.as_option().expect("summary set");
-    assert!(!summary.rounds.is_empty());
+    assert_ne!(summary.rounds, [] as [tf2_demostats_http::demostats::v1::RoundSummary; 0]);
     assert!(
         summary.rounds.iter().any(|r| !r.players.is_empty()),
         "at least one round has players"

@@ -568,7 +568,7 @@ fn parse_capper_entities(cappers: &MaybeUtf8String) -> Vec<u32> {
     if bytes.is_empty() || bytes.iter().any(|b| *b >= 64) {
         return Vec::new();
     }
-    bytes.iter().map(|b| *b as u32).collect()
+    bytes.iter().map(|b| u32::from(*b)).collect()
 }
 
 /// Positional decode of `take_health` raw values:
@@ -649,7 +649,11 @@ impl<'a> MatchAnalyzer<'a> {
         text: Option<&str>,
         data: Option<Stream>,
     ) -> ReadResult<()> {
-        if let Some(user_info) = UserInfo::parse_from_string_table(index as u16, text, data)? {
+        if let Some(user_info) = UserInfo::parse_from_string_table(
+            u16::try_from(index).unwrap_or_default(),
+            text,
+            data,
+        )? {
             let entity_id = user_info.entity_id;
             let user_id = user_info.player_info.user_id;
             let steam_id = user_info.player_info.steam_id.clone();
@@ -1062,7 +1066,10 @@ impl<'a> MatchAnalyzer<'a> {
 
         if let Some(e) = &self.entities[eid] {
             if let Some(h) = e.handle() {
-                self.entity_handles.insert(h, EntityId::from(eid as u32));
+                self.entity_handles.insert(
+                    h,
+                    EntityId::from(u32::try_from(eid).unwrap_or_default()),
+                );
             }
 
             if let (Some(shape), Some(origin)) = (e.shape(), e.origin()) {
@@ -1128,7 +1135,7 @@ impl<'a> MatchAnalyzer<'a> {
                                 error!("Negative healing of {hi} by {}", player.name);
                                 return;
                             }
-                            let h = hi as u32;
+                            let h = u32::try_from(hi).unwrap_or_default();
 
                             // Skip the first real value; sometimes STV starts a little late and
                             // we can't distinguish the healing values.
@@ -1151,24 +1158,24 @@ impl<'a> MatchAnalyzer<'a> {
                         }
                         "m_iTotalScore" => {
                             player.points =
-                                Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
+                                Some(u32::try_from(i64::try_from(&prop.value).unwrap_or_default()).unwrap_or_default())
                         }
                         "m_iDamage" => {
                             player.scoreboard_damage =
-                                Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
+                                Some(u32::try_from(i64::try_from(&prop.value).unwrap_or_default()).unwrap_or_default())
                         }
                         "m_iDeaths" => {
                             player.scoreboard_deaths =
-                                Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
+                                Some(u32::try_from(i64::try_from(&prop.value).unwrap_or_default()).unwrap_or_default())
                         }
                         "m_iScore" => {
                             // iScore is close to number of kills; but counts post-game kills and decrements on suicide.
                             player.scoreboard_kills =
-                                Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
+                                Some(u32::try_from(i64::try_from(&prop.value).unwrap_or_default()).unwrap_or_default())
                         }
                         "m_iBonusPoints" => {
                             player.bonus_points =
-                                Some(i64::try_from(&prop.value).unwrap_or_default() as u32)
+                                Some(u32::try_from(i64::try_from(&prop.value).unwrap_or_default()).unwrap_or_default())
                         }
                         "m_iPlayerClass" => {}
                         "m_iPlayerLevel" => {}
@@ -1211,7 +1218,7 @@ impl<'a> MatchAnalyzer<'a> {
                     self.waiting_for_players = *x == 1;
                     trace!("Waiting for players: {}", self.waiting_for_players);
                 }
-                (ROUND_STATE, SendPropValue::Integer(x)) => match RoundState::try_from(*x as u16) {
+                (ROUND_STATE, SendPropValue::Integer(x)) => match RoundState::try_from(u16::try_from(*x).unwrap_or_default()) {
                     Ok(x) => self.round_state = x,
                     Err(e) => error!("Could not parse RoundState: {e}"),
                 },
@@ -1287,7 +1294,7 @@ impl<'a> MatchAnalyzer<'a> {
             None
         } else {
             self.user_id_to_steam_id
-                .get(&UserId::from(death.attacker as u32))
+                .get(&UserId::from(u32::from(death.attacker)))
                 .cloned()
         };
         let (killer_pos, killer_angles) = killer
@@ -1341,8 +1348,8 @@ impl<'a> MatchAnalyzer<'a> {
 
         let feigned = flags.contains(Death::Feign);
 
-        let attacker_user_id = UserId::from(death.attacker as u32);
-        let victim_user_id = UserId::from(death.user_id as u32);
+        let attacker_user_id = UserId::from(u32::from(death.attacker));
+        let victim_user_id = UserId::from(u32::from(death.user_id));
 
         if victim_user_id == attacker_user_id {
             let steamid = self.user_id_to_steam_id.get(&attacker_user_id).cloned();
@@ -1494,7 +1501,7 @@ impl<'a> MatchAnalyzer<'a> {
             return;
         }
 
-        let assister_user_id = UserId::from(death.assister as u32);
+        let assister_user_id = UserId::from(u32::from(death.assister));
         let assister_steamid = self.user_id_to_steam_id.get(&assister_user_id).cloned();
         if let Some(assister_steamid) = assister_steamid {
             if let Some(assister) = self.player_summaries.get_mut(&assister_steamid) {
@@ -1535,7 +1542,7 @@ impl<'a> MatchAnalyzer<'a> {
         trace!("Point captured {:?}", cap);
 
         for entity_id_val in cap.cappers.as_bytes() {
-            let eid = EntityId::from(*entity_id_val as u32);
+            let eid = EntityId::from(u32::from(*entity_id_val));
             if let Some(player) = self.get_player_summary_mut(&eid) {
                 player.handle_capture();
             } else {
@@ -1547,7 +1554,7 @@ impl<'a> MatchAnalyzer<'a> {
     pub fn handle_capture_blocked(&mut self, cap: &TeamPlayCaptureBlockedEvent) {
         trace!("Capture blocked {:?}", cap);
 
-        let eid = EntityId::from(cap.blocker as u32);
+        let eid = EntityId::from(u32::from(cap.blocker));
         if let Some(player) = self.get_player_summary_mut(&eid) {
             player.handle_capture_blocked();
         } else {
@@ -2620,7 +2627,8 @@ impl<'a> MatchAnalyzer<'a> {
     /// a live `m_hHealingTarget` is an actively-beaming medigun (only
     /// mediguns carry the prop); time is split per (medic, target) pair.
     fn accumulate_heal_targets(&mut self, delta_ticks: u32) {
-        let seconds = delta_ticks as f32 * TICK_INTERVAL;
+        let seconds =
+            f32::from(u16::try_from(delta_ticks).unwrap_or_default()) * TICK_INTERVAL;
         let mut beams = Vec::new();
         for (handle, uid) in &self.weapon_owners {
             let Some(entity) = self
@@ -2743,9 +2751,9 @@ impl MessageHandler for MatchAnalyzer<'_> {
                         let mut player: Option<u32> = None;
                         for p in &e.props {
                             match (p.identifier, &p.value) {
-                                (ANIM_ID, &SendPropValue::Integer(x)) => event = Some(x as u32),
+                                (ANIM_ID, &SendPropValue::Integer(x)) => event = Some(u32::try_from(x).unwrap_or_default()),
                                 (ANIM_PLAYER, &SendPropValue::Integer(x)) => {
-                                    player = Some(x as u32);
+                                    player = Some(u32::try_from(x).unwrap_or_default());
                                 }
                                 _ => {}
                             }
@@ -2782,13 +2790,13 @@ impl MessageHandler for MatchAnalyzer<'_> {
                         for p in &e.props {
                             match (p.identifier, &p.value) {
                                 (EFFECT_ENTITY, &SendPropValue::Integer(x)) => {
-                                    entity = Some((x as u32) + 1);
+                                    entity = Some((u32::try_from(x).unwrap_or_default()) + 1);
                                 }
                                 (EFFECT_NAME, &SendPropValue::Integer(x)) => {
-                                    name_id = Some(x as u32);
+                                    name_id = Some(u32::try_from(x).unwrap_or_default());
                                 }
                                 (EFFECT_DAMAGE_TYPE, &SendPropValue::Integer(x)) => {
-                                    raw_dmg_type = x as u32;
+                                    raw_dmg_type = u32::try_from(x).unwrap_or_default();
                                 }
                                 (EFFECT_ORIGIN_X, &SendPropValue::Float(x)) => {
                                     origin.x = x;
@@ -2877,7 +2885,9 @@ impl MessageHandler for MatchAnalyzer<'_> {
                             {
                                 // Player ids here are offset by 1
                                 // https://github.com/ValveSoftware/source-sdk-2013/blob/0565403b153dfcde602f6f58d8f4d13483696a13/src/game/server/tf/tf_fx.cpp#L80
-                                player = Some(EntityId::from((x + 1) as u32));
+                                player = Some(EntityId::from(
+                                    u32::try_from(x + 1).unwrap_or_default(),
+                                ));
                             }
                         }
 
@@ -2975,7 +2985,7 @@ impl MessageHandler for MatchAnalyzer<'_> {
 
                 GameEvent::TeamPlayWinPanel(e) => {
                     for entity_id_val in [e.player_1, e.player_2, e.player_3] {
-                        let eid = EntityId::from(entity_id_val as u32);
+                        let eid = EntityId::from(u32::from(entity_id_val));
                         let steamid = self
                             .user_entities
                             .get(&eid)
@@ -3153,7 +3163,7 @@ impl MessageHandler for MatchAnalyzer<'_> {
             );
         } else if table == "modelprecache" {
             self.models.insert(
-                index as u32,
+                u32::try_from(index).unwrap_or_default(),
                 entry
                     .text
                     .as_ref()
@@ -3162,7 +3172,7 @@ impl MessageHandler for MatchAnalyzer<'_> {
             );
         } else if table == "EffectDispatch" {
             self.effects.insert(
-                index as u32,
+                u32::try_from(index).unwrap_or_default(),
                 entry
                     .text
                     .as_ref()
@@ -3383,7 +3393,7 @@ mod tests {
                     delay: None,
                 }],
                 removed_entities: vec![],
-                max_entries: ENTITY_COUNT as u16,
+                max_entries: u16::try_from(ENTITY_COUNT).unwrap_or_default(),
                 delta: None,
                 updated_base_line: false,
                 base_line: BaselineIndex::First,

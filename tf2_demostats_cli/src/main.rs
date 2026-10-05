@@ -118,7 +118,7 @@ async fn main() -> ExitCode {
             error!("Error: {}", e);
             return ExitCode::FAILURE;
         }
-        Ok(_) => ExitCode::SUCCESS,
+        Ok(()) => ExitCode::SUCCESS,
     }
 }
 async fn exec() -> Result<()> {
@@ -243,9 +243,7 @@ async fn cmd_voice(
         let dir = match &out_dir {
             Some(dir) => dir.clone(),
             None => demo_path
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from(".")),
+                .parent().map_or_else(|| PathBuf::from("."), Path::to_path_buf),
         };
         let stem = demo_path
             .file_stem()
@@ -263,11 +261,11 @@ async fn cmd_voice(
             continue;
         }
         // Mixing requires PCM: decode once from the same capture.
-        let mixed = if !no_mix {
+        let mixed = if no_mix {
+            None
+        } else {
             let pcm = voice::VoiceOutput::from_capture(&capture);
             Some((voice::downmix(&pcm), pcm.sample_rate))
-        } else {
-            None
         };
         let mixed_ref = mixed.as_ref().map(|(s, r)| (s.as_slice(), *r));
         let written = voice::write_opus_files(&output, mixed_ref, &dir, stem, !only_mix, !no_mix)?;

@@ -124,14 +124,14 @@ impl Projectile {
                     patch.is_reflected = Some(b > 0)
                 }
                 (OWNER | DEFLECT_OWNER, &SendPropValue::Integer(h)) => {
-                    let h = h as u32;
+                    let h = u32::try_from(h).unwrap_or_default();
                     if h != INVALID_HANDLE {
                         patch.owner = Some(h);
                     }
                 }
 
                 (ORIGINAL_LAUNCHER, &SendPropValue::Integer(h)) => {
-                    let launcher = h as u32;
+                    let launcher = u32::try_from(h).unwrap_or_default();
                     if launcher != INVALID_HANDLE {
                         patch.original_launcher_handle = Some(launcher);
                     }
@@ -151,7 +151,7 @@ impl Projectile {
                 }
 
                 (TEAM, &SendPropValue::Integer(t)) => {
-                    if let Ok(team_val) = Team::try_from(t as u8) {
+                    if let Ok(team_val) = Team::try_from(u8::try_from(t).unwrap_or_default()) {
                         patch.team = Some(team_val);
                     } else {
                         error!("Invalid team value {t}");
@@ -165,19 +165,19 @@ impl Projectile {
                         continue;
                     }
 
-                    let Ok(grenade_type) = GrenadeType::try_from(t as u16) else {
+                    let Ok(grenade_type) = GrenadeType::try_from(u16::try_from(t).unwrap_or_default()) else {
                         error!("Unknown grenade type {t} when parsing {packet:?}");
                         continue;
                     };
                     patch.grenade_type = Some(grenade_type);
                 }
                 (MODEL, &SendPropValue::Integer(t)) => {
-                    patch.model_id = Some(t as u32);
+                    patch.model_id = Some(u32::try_from(t).unwrap_or_default());
                 }
 
                 (EFFECTS, &SendPropValue::Integer(f)) => {
                     patch.effects = Some(
-                        EnumSet::<Effects>::try_from_repr(f as u16).unwrap_or_else(|| {
+                        EnumSet::<Effects>::try_from_repr(u16::try_from(f).unwrap_or_default()).unwrap_or_else(|| {
                             error!("Unknown entity effects on projectile: {}", f);
                             EnumSet::<_>::new()
                         }),
