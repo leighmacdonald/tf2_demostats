@@ -20,6 +20,16 @@ debug = false   # Exclude debug symbols for smaller binary size
 lto = true      # Link-Time Optimization for further size reduction
 panic = "abort" # Use `abort` to reduce binary size further
 
+# merge -> merge_derive depends on proc-macro-error2, which re-exports the
+# `proc_macro` crate in a way that will be rejected by a future Rust
+# release (rust-lang/rust#127909). The maintained fork
+# gamma0987/proc-macro-error3 fixes this, but renamed the crate to
+# proc-macro-error3, so it cannot replace proc-macro-error2 by name.
+# Pin the last revision that still carries the original crate name while
+# including the fix.
+[patch.crates-io]
+proc-macro-error2 = { git = "https://github.com/gamma0987/proc-macro-error3", rev = "d2a35f6c60c75bf63fbebddff506a25222cc3750" }
+
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 # doc_markdown = "allow"
