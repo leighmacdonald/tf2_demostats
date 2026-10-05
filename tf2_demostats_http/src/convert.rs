@@ -85,6 +85,27 @@ pub fn stats(value: &tf2_demostats::parser::stats::Stats) -> pb::Stats {
         hits: value.hits,
         object_built: value.object_built,
         object_destroyed: value.object_destroyed,
+        heals: value.heals,
+        healed: value.healed,
+        crossbow_heals: value.crossbow_heals,
+        crossbow_healing: value.crossbow_healing,
+        heal_on_hit: value.heal_on_hit,
+        extinguishes: value.extinguishes,
+        building_healing: value.building_healing,
+        dropped_ubers: value.dropped_ubers,
+        reflects: value.reflects,
+        defenses: value.defenses,
+        direct_hits: value.direct_hits,
+        teleports: value.teleports,
+        push_distance: value.push_distance,
+        environmental_deaths: value.environmental_deaths,
+        environmental_kills: value.environmental_kills,
+        object_placed: value.object_placed,
+        object_upgraded: value.object_upgraded,
+        object_carried: value.object_carried,
+        object_dropped: value.object_dropped,
+        object_removed: value.object_removed,
+        object_detonated: value.object_detonated,
         ..Default::default()
     }
 }
@@ -225,6 +246,19 @@ pub fn sm_option(value: &summarizer::SmVoteOption) -> pb::SmVoteOption {
     }
 }
 
+pub fn point_capture(value: &summarizer::PointCaptureStart) -> pb::PointCaptureStart {
+    pb::PointCaptureStart {
+        tick: u32::from(value.tick),
+        cp: u32::from(value.cp),
+        cp_name: value.cp_name.clone(),
+        team: u32::from(value.team),
+        cap_team: u32::from(value.cap_team),
+        cappers: value.cappers.clone(),
+        cap_time: value.cap_time,
+        ..Default::default()
+    }
+}
+
 pub fn sm_vote(value: &summarizer::SourceModVote) -> pb::SourceModVote {
     pb::SourceModVote {
         kind: value.kind.clone(),
@@ -250,6 +284,12 @@ pub fn demo_output(value: &DemoOutput) -> pb::DemoOutput {
             chat: value.summary.chat.iter().map(chat).collect(),
             votes: value.summary.votes.iter().map(vote).collect(),
             sourcemod_votes: value.summary.sourcemod_votes.iter().map(sm_vote).collect(),
+            point_captures: value
+                .summary
+                .point_captures
+                .iter()
+                .map(point_capture)
+                .collect(),
             ..Default::default()
         }),
         ..Default::default()

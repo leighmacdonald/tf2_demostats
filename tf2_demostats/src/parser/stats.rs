@@ -91,6 +91,85 @@ pub struct Stats {
     pub object_built: u32,
     #[serde(skip_serializing_if = "is_zero")]
     pub object_destroyed: u32,
+
+    // Discrete heal events (PlayerHealed) as the healer. Kept separate from
+    // medigun-sustain `healing`: the event also fires for self-regen ticks,
+    // kits attributed to nobody (healer 0, skipped), and possibly crossbow
+    // bolts (which additionally fire CrossbowHeal, counted below).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub heals: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub healed: u32,
+
+    // Crusader's Crossbow bolts (CrossbowHeal) as the healer.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub crossbow_heals: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub crossbow_healing: u32,
+
+    // Health-gain notices (PlayerHealOnHit) as the recipient. Observed to
+    // mirror most PlayerHealed amounts (kits, regen, crossbow) with the
+    // recipient's active weapon defindex attached (65535 = none/unknown).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub heal_on_hit: u32,
+
+    #[serde(skip_serializing_if = "is_zero")]
+    pub extinguishes: u32,
+
+    // Wrench healing on buildings (BuildingHealed) as the healer.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub building_healing: u32,
+
+    // Medic died with full uber (MedicDeath.charged). Event-sourced
+    // complement to entity-derived `drops` (charge prop tracking is
+    // lossy); the two should roughly agree.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub dropped_ubers: u32,
+
+    // Airblast reflects (ObjectDeflected) as the deflector.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub reflects: u32,
+
+    // Killed an enemy who was capping (KilledCappingPlayer as killer,
+    // CapperKilled as blocker).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub defenses: u32,
+
+    // Direct projectile hits that were not kills (ProjectileDirectHit).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub direct_hits: u32,
+
+    // Teammates moved via this player's teleporter (PlayerTeleported).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub teleports: u32,
+
+    // Cart push distance attributed to the pusher (PayloadPushed).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub push_distance: u32,
+
+    // Trigger-hurt/environment kills. Victims are also counted in `deaths`
+    // via player_death (attacker 0 = world); these tag the subset.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub environmental_deaths: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub environmental_kills: u32,
+
+    // Building lifecycle from broadcast events (PlayerBuiltObject family).
+    // NOTE: `object_placed` overlaps entity-derived `object_built`
+    // (placements vs completions-in-PVS); it additionally covers sappers,
+    // which entities never count.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub object_placed: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub object_upgraded: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub object_carried: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub object_dropped: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub object_removed: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub object_detonated: u32,
 }
 
 impl Stats {
@@ -245,5 +324,83 @@ impl Stats {
         } else {
             self.healing += amount;
         }
+    }
+
+    pub fn handle_heal_given(&mut self, amount: u32) {
+        self.heals += 1;
+        self.healed += amount;
+    }
+
+    pub fn handle_crossbow_heal(&mut self, amount: u32) {
+        self.crossbow_heals += 1;
+        self.crossbow_healing += amount;
+    }
+
+    pub fn handle_heal_on_hit(&mut self, amount: u32) {
+        self.heal_on_hit += amount;
+    }
+
+    pub fn handle_extinguish(&mut self) {
+        self.extinguishes += 1;
+    }
+
+    pub fn handle_building_heal(&mut self, amount: u32) {
+        self.building_healing += amount;
+    }
+
+    pub fn handle_dropped_uber(&mut self) {
+        self.dropped_ubers += 1;
+    }
+
+    pub fn handle_reflect(&mut self) {
+        self.reflects += 1;
+    }
+
+    pub fn handle_defense(&mut self) {
+        self.defenses += 1;
+    }
+
+    pub fn handle_direct_hit(&mut self) {
+        self.direct_hits += 1;
+    }
+
+    pub fn handle_teleport(&mut self) {
+        self.teleports += 1;
+    }
+
+    pub fn handle_push(&mut self, distance: u32) {
+        self.push_distance += distance;
+    }
+
+    pub fn handle_environmental_death(&mut self) {
+        self.environmental_deaths += 1;
+    }
+
+    pub fn handle_environmental_kill(&mut self) {
+        self.environmental_kills += 1;
+    }
+
+    pub fn handle_object_placed(&mut self) {
+        self.object_placed += 1;
+    }
+
+    pub fn handle_object_upgraded(&mut self) {
+        self.object_upgraded += 1;
+    }
+
+    pub fn handle_object_carried(&mut self) {
+        self.object_carried += 1;
+    }
+
+    pub fn handle_object_dropped(&mut self) {
+        self.object_dropped += 1;
+    }
+
+    pub fn handle_object_removed(&mut self) {
+        self.object_removed += 1;
+    }
+
+    pub fn handle_object_detonated(&mut self) {
+        self.object_detonated += 1;
     }
 }
