@@ -24,8 +24,11 @@ builds:
       - --release
       - --package=tf2_demostats_cli
     env:
-      # Static-link the vendored-or-system libopus so release artifacts
-      # carry no libopus runtime dependency.
+      # Bypass the system libopus pkg-config probe (pkg-config silently
+      # refuses to static-link libs under /usr, so OPUS_STATIC alone would
+      # still produce a dynamic libopus.so.0 dependency) and statically link
+      # the cmake-vendored copy instead.
+      - OPUS_NO_PKG=1
       - OPUS_STATIC=1
       # The vendored-opus cmake fallback needs this with CMake >= 4;
       # harmless on older CMake.
