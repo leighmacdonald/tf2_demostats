@@ -7,12 +7,12 @@ use std::{
 use ogg::writing::{PacketWriteEndInfo, PacketWriter};
 use steam_audio_codec::{SteamVoiceData, SteamVoiceDecoder};
 use tf_demo_parser::{
+    Demo, DemoParser, MessageType, ParserState,
     demo::{
         data::DemoTick,
-        message::{voice::VoiceInitMessage, Message},
+        message::{Message, voice::VoiceInitMessage},
         parser::MessageHandler,
     },
-    Demo, DemoParser, MessageType, ParserState,
 };
 use tracing::warn;
 
@@ -146,6 +146,10 @@ pub struct VoiceCapture {
 ///
 /// Demos using any other `sv_voicecodec` yield an empty capture instead of
 /// an error.
+///
+/// # Errors
+///
+/// Returns an error if the buffer is not a valid demo or parsing fails.
 pub fn capture_voice(buffer: &[u8]) -> crate::Result<VoiceCapture> {
     let demo = Demo::new(buffer);
     let parser = DemoParser::new_with_analyser(demo.get_stream(), CaptureHandler::new());
@@ -157,6 +161,10 @@ pub fn capture_voice(buffer: &[u8]) -> crate::Result<VoiceCapture> {
 ///
 /// Demos using any other `sv_voicecodec` yield an empty [`VoiceOutput`]
 /// (with [`VoiceOutput::codec`] set) instead of an error.
+///
+/// # Errors
+///
+/// Returns an error if the buffer is not a valid demo or parsing fails.
 pub fn extract_voice(buffer: &[u8]) -> crate::Result<VoiceOutput> {
     Ok(VoiceOutput::from_capture(&capture_voice(buffer)?))
 }
@@ -166,6 +174,10 @@ pub fn extract_voice(buffer: &[u8]) -> crate::Result<VoiceOutput> {
 /// No decoding or transcoding is performed on per-player streams. Demos using
 /// any other `sv_voicecodec` yield an empty [`OpusOutput`] instead of an
 /// error.
+///
+/// # Errors
+///
+/// Returns an error if the buffer is not a valid demo or parsing fails.
 pub fn extract_opus(buffer: &[u8]) -> crate::Result<OpusOutput> {
     Ok(OpusOutput::from_capture(&capture_voice(buffer)?))
 }
@@ -181,7 +193,8 @@ pub fn downmix(output: &VoiceOutput) -> Vec<i16> {
     for track in output.players.values() {
         for (i, sample) in track.iter().enumerate() {
             let sum = i32::from(mixed[i]) + i32::from(*sample);
-            mixed[i] = sum.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+            mixed[i] = i16::try_from(sum.clamp(i32::from(i16::MIN), i32::from(i16::MAX)))
+                .unwrap_or_default();
         }
     }
     mixed
@@ -192,6 +205,10 @@ pub fn downmix(output: &VoiceOutput) -> Vec<i16> {
 ///
 /// Files are named `{stem}_{steamid64}.opus` and `{stem}_downmix.opus`.
 /// Returns the paths written (empty when there is no voice audio).
+///
+/// # Errors
+///
+/// Returns an error on I/O failures or if encoding a track fails.
 pub fn write_opus_files(
     output: &OpusOutput,
     mixed: Option<(&[i16], u32)>,
@@ -229,10 +246,10 @@ pub fn write_opus_files(
 /// Ogg stream serial derived from the speaker (each file is its own stream,
 /// so uniqueness across files is not required).
 fn stream_serial(steam_id: u64) -> u32 {
-    (steam_id & 0xffff_ffff) as u32 | 1
+    u32::try_from(steam_id & 0xffff_ffff).unwrap_or_default() | 1
 }
 
-/// 19-byte OpusHead header (RFC 7845): mono, mapping family 0.
+/// 19-byte `OpusHead` header (RFC 7845): mono, mapping family 0.
 fn opus_head(input_sample_rate: u32) -> Vec<u8> {
     let mut head = Vec::with_capacity(19);
     head.extend_from_slice(b"OpusHead");
@@ -245,12 +262,12 @@ fn opus_head(input_sample_rate: u32) -> Vec<u8> {
     head
 }
 
-/// OpusTags header with a single encoder vendor tag.
+/// `OpusTags` header with a single encoder vendor tag.
 fn opus_tags() -> Vec<u8> {
-    let vendor = b"tf2_demostats";
+    let vendor = b"tf2-demostats";
     let mut tags = Vec::with_capacity(8 + 4 + vendor.len() + 4);
     tags.extend_from_slice(b"OpusTags");
-    tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+    tags.extend_from_slice(&(u32::try_from(vendor.len()).unwrap_or_default()).to_le_bytes());
     tags.extend_from_slice(vendor);
     tags.extend_from_slice(&0u32.to_le_bytes()); // no user comments
     tags
@@ -363,13 +380,13 @@ fn encode_mix_to_ogg(
 
     let mut granule: u64 = 0;
     let mut pcm = vec![0i16; frame_len];
-    let mut encoded = vec![0u8; 4000];
+    let mut frame = vec![0u8; 4000];
     let chunks = samples.chunks(frame_len);
     let total = chunks.len();
     for (i, chunk) in chunks.enumerate() {
         pcm.fill(0);
         pcm[..chunk.len()].copy_from_slice(chunk);
-        let len = encoder.encode(&pcm, &mut encoded)?;
+        let len = encoder.encode(&pcm, &mut frame)?;
         granule += (frame_len as u64 * u64::from(OGG_OPUS_CLOCK)) / u64::from(rate);
         let end = if i + 1 == total {
             PacketWriteEndInfo::EndStream
@@ -377,7 +394,7 @@ fn encode_mix_to_ogg(
             PacketWriteEndInfo::NormalPacket
         };
         writer
-            .write_packet(encoded[..len].to_vec(), serial, end, granule)
+            .write_packet(frame[..len].to_vec(), serial, end, granule)
             .map_err(|e| VoiceError(format!("failed writing {}: {e}", path.display())))?;
     }
     Ok(())
@@ -493,8 +510,11 @@ impl VoiceOutput {
             };
 
             let anchor = capture.anchor_tick.unwrap_or(chunk.tick);
+            // No TryFrom<f64> exists; the product is a small non-negative
+            // sample count, so the truncation/sign lints don't apply.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let global_pos = (f64::from(chunk.tick.saturating_sub(anchor))
-                * chunk.sample_rate.max(1) as f64
+                * f64::from(chunk.sample_rate.max(1))
                 * capture.interval_per_tick) as usize;
             let track = output.players.entry(chunk.steam_id).or_default();
             let pad = placement_pad(global_pos, count, track.len());
@@ -735,7 +755,7 @@ mod tests {
     /// Wrap raw Opus frames in a steam `OpusPlc` packet (len + blob).
     fn plc_packet(entries: &[u8]) -> Vec<u8> {
         let mut p = vec![6]; // OpusPlc
-        p.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        p.extend_from_slice(&(u16::try_from(entries.len()).unwrap_or_default()).to_le_bytes());
         p.extend_from_slice(entries);
         p
     }
@@ -743,7 +763,7 @@ mod tests {
     /// One inner PLC entry: len + seq + frame bytes.
     fn plc_entry(frame: &[u8], seq: u16) -> Vec<u8> {
         let mut e = Vec::new();
-        e.extend_from_slice(&(frame.len() as u16).to_le_bytes());
+        e.extend_from_slice(&(u16::try_from(frame.len()).unwrap_or_default()).to_le_bytes());
         e.extend_from_slice(&seq.to_le_bytes());
         e.extend_from_slice(frame);
         e
@@ -822,8 +842,11 @@ mod tests {
     #[test]
     fn truncated_plc_is_rejected() {
         assert!(parse_plc_frames(&[0x05, 0x00, 0x01]).is_err()); // len=5, truncated seq+data
-        assert!(parse_plc_frames(&[]).unwrap().is_empty());
-        assert!(parse_plc_frames(&[0xFF, 0xFF]).unwrap().is_empty()); // lone reset marker
+        assert_eq!(parse_plc_frames(&[]).unwrap(), Vec::<Vec<u8>>::new());
+        assert_eq!(
+            parse_plc_frames(&[0xFF, 0xFF]).unwrap(),
+            Vec::<Vec<u8>>::new()
+        ); // lone reset marker
     }
 
     #[test]
@@ -965,7 +988,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("tf2_voice_empty_{}", std::process::id()));
         let opus_out =
             write_opus_files(&OpusOutput::default(), None, &dir, "test", true, true).unwrap();
-        assert!(opus_out.is_empty());
+        assert_eq!(opus_out, Vec::<std::path::PathBuf>::new());
         assert!(!dir.exists());
     }
 }

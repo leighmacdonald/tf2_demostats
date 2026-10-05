@@ -1,14 +1,14 @@
 use crate::parser::{
     entity::{Entity, EntityClass},
-    props::*,
+    props::{ITEM_DEFINITION, OWNER, SELF_HANDLE},
     summarizer::MatchAnalyzerView,
 };
 use std::any::Any;
 use tf_demo_parser::{
+    ParserState,
     demo::{
         message::packetentities::PacketEntity, packet::datatable::ClassId, sendprop::SendPropValue,
     },
-    ParserState,
 };
 
 #[optfield::optfield(ShieldPatch, merge_fn, attrs)]
@@ -25,13 +25,13 @@ impl Shield {
         for prop in packet.props(parser_state) {
             match (prop.identifier, &prop.value) {
                 (SELF_HANDLE, &SendPropValue::Integer(h)) => {
-                    patch.handle = Some(h as u32);
+                    patch.handle = Some(u32::try_from(h).unwrap_or_default());
                 }
                 (OWNER, &SendPropValue::Integer(h)) => {
-                    patch.owner = Some(h as u32);
+                    patch.owner = Some(u32::try_from(h).unwrap_or_default());
                 }
                 (ITEM_DEFINITION, &SendPropValue::Integer(id)) => {
-                    patch.schema_id = Some(id as u32);
+                    patch.schema_id = Some(u32::try_from(id).unwrap_or_default());
                 }
                 _ => {}
             }
@@ -48,8 +48,7 @@ impl Entity for Shield {
         let class_name = parser_state
             .server_classes
             .get(<ClassId as Into<usize>>::into(packet.server_class))
-            .map(|s| s.name.to_string())
-            .unwrap_or("UNKNOWN_PROJECTILE".to_string());
+            .map_or("UNKNOWN_PROJECTILE".to_string(), |s| s.name.to_string());
 
         let mut p = ShieldPatch::default();
         Shield::parse(packet, parser_state, &mut p);

@@ -21,7 +21,7 @@ pub enum RoundState {
     BetweenRounds = 10,
 }
 
-pub const INVALID_HANDLE: u32 = 0x1fffff;
+pub const INVALID_HANDLE: u32 = 0x001f_ffff;
 
 /// Seconds per demo tick (TF2 runs at ~66.67 ticks/s).
 pub const TICK_INTERVAL: f32 = 1.0 / 66.666_667;
@@ -491,8 +491,8 @@ pub enum PlayerCondition {
 }
 
 pub fn update_condition<const OFFSET: usize>(condition: &mut EnumSet<PlayerCondition>, bits: u32) {
-    let mask: u128 = 0xffffffff << OFFSET;
-    let new_cond = (condition.as_repr() & !mask) | ((bits as u128) << OFFSET);
+    let mask: u128 = 0xffff_ffffu128 << OFFSET;
+    let new_cond = (condition.as_repr() & !mask) | ((u128::from(bits)) << OFFSET);
     *condition = EnumSet::<PlayerCondition>::from_repr(new_cond);
 }
 

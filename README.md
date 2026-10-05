@@ -5,7 +5,7 @@ Demo parser for Team Fortress 2. Parse `.dem` files to JSON, extract voice audio
 ## Workspace crates
 
 - `tf2_demostats` — library: demo parsing (`parser`), voice extraction (`voice`), server-based transcription (`transcribe`), schema handling (`schema`)
-- `tf2_demostats_cli` — the `tf2_demostats` binary (parse, voice, transcribe, serve, update)
+- `tf2_demostats_cli` — the `tf2-demostats` binary (parse, voice, transcribe, serve, update)
 - `tf2_demostats_http` — ConnectRPC front end for demo parsing
 
 ## Prerequisites
@@ -24,7 +24,7 @@ This repo is a nix flake: it provides an installable package and a dev shell
 automatically via `.envrc`).
 
 ```sh
-nix build .                  # installable package -> ./result/bin/tf2_demostats
+nix build .                  # installable package -> ./result/bin/tf2-demostats
 nix run . -- voice match.dem # run directly without installing
 nix develop                  # dev shell: rust toolchain, cargo helpers, system libs
 nix flake check              # build package + validate dev shell
@@ -41,12 +41,12 @@ Notes:
 
 ```sh
 cargo build --release
-# binary: ./target/release/tf2_demostats
+# binary: ./target/release/tf2-demostats
 ```
 
 ## Usage
 
-All commands support `--help`. Set `RUST_LOG=info` for progress logging. Shell completions: `tf2_demostats --generate <bash|fish|zsh|...>`.
+All commands support `--help`. Set `RUST_LOG=info` for progress logging. Shell completions: `tf2-demostats --generate <bash|fish|zsh|...>`.
 
 ### Parse a demo to JSON
 
@@ -54,8 +54,8 @@ Demos need the TF2 schema, downloaded once with a Steam Web API key:
 
 ```sh
 export STEAM_API_KEY=...
-tf2_demostats update                      # writes schema.json
-tf2_demostats parse --schema schema.json match.dem [...]
+tf2-demostats update                      # writes schema.json
+tf2-demostats parse --schema schema.json match.dem [...]
 ```
 
 Writes `<demo>.json` next to each demo (player stats, kills, objectives, chat, …).
@@ -63,7 +63,7 @@ Writes `<demo>.json` next to each demo (player stats, kills, objectives, chat, �
 ### Extract voice audio
 
 ```sh
-tf2_demostats voice match.dem [--out-dir DIR] [--no-mix] [--only-mix]
+tf2-demostats voice match.dem [--out-dir DIR] [--no-mix] [--only-mix]
 ```
 
 - Demos using the `steam` voice codec (the norm on modern servers) are decoded; other codecs are skipped with a warning.
@@ -84,7 +84,7 @@ docker run -p 8000:8000 \
 Then:
 
 ```sh
-tf2_demostats voice match.dem --transcribe
+tf2-demostats voice match.dem --transcribe
 ```
 
 Each speaker's `.opus` is POSTed to `{url}/v1/audio/transcriptions` (`response_format=verbose_json`) and the segments are merged into `{stem}_transcript.json`, keyed by steamid64:
@@ -120,7 +120,7 @@ Each speaker's `.opus` is POSTed to `{url}/v1/audio/transcriptions` (`response_f
 ### Serve over ConnectRPC
 
 ```sh
-tf2_demostats serve [--schema schema.json] [--host 0.0.0.0] [--port 8811]
+tf2-demostats serve [--schema schema.json] [--host 0.0.0.0] [--port 8811]
 ```
 
 Serves `demostats.v1.DemoService/ParseDemo` over Connect, gRPC, and gRPC-Web

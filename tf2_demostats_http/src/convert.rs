@@ -5,10 +5,11 @@
 //! These conversions are total and infallible.
 
 use crate::demostats::v1 as pb;
-use tf2_demostats::parser::{summarizer, DemoOutput};
 use tf_demo_parser::demo::header::Header;
 use tf_demo_parser::demo::parser::gamestateanalyser::{Class, Team};
+use tf2_demostats::parser::{DemoOutput, summarizer};
 
+#[must_use]
 pub fn team(value: &Team) -> pb::Team {
     match value {
         Team::Other => pb::Team::TEAM_OTHER,
@@ -18,6 +19,7 @@ pub fn team(value: &Team) -> pb::Team {
     }
 }
 
+#[must_use]
 pub fn class(value: &Class) -> pb::Class {
     match value {
         Class::Other => pb::Class::CLASS_OTHER,
@@ -33,6 +35,7 @@ pub fn class(value: &Class) -> pb::Class {
     }
 }
 
+#[must_use]
 pub fn header(value: &Header) -> pb::Header {
     pb::Header {
         demo_type: value.demo_type.clone(),
@@ -50,6 +53,7 @@ pub fn header(value: &Header) -> pb::Header {
     }
 }
 
+#[must_use]
 pub fn stats(value: &tf2_demostats::parser::stats::Stats) -> pb::Stats {
     pb::Stats {
         kills: value.kills,
@@ -178,6 +182,7 @@ pub fn round(value: &summarizer::RoundSummary) -> pb::RoundSummary {
     }
 }
 
+#[must_use]
 pub fn chat(value: &summarizer::ChatMessage) -> pb::ChatMessage {
     pb::ChatMessage {
         tick: u32::from(value.tick),
@@ -191,6 +196,7 @@ pub fn chat(value: &summarizer::ChatMessage) -> pb::ChatMessage {
     }
 }
 
+#[must_use]
 pub fn vote_ballot(value: &summarizer::VoteBallot) -> pb::VoteBallot {
     pb::VoteBallot {
         tick: u32::from(value.tick),
@@ -225,6 +231,7 @@ pub fn vote(value: &summarizer::VoteSummary) -> pb::VoteSummary {
     }
 }
 
+#[must_use]
 pub fn sm_initiator(value: &summarizer::SmVoteInitiator) -> pb::SmVoteInitiator {
     pb::SmVoteInitiator {
         name: value.name.clone(),
@@ -236,6 +243,7 @@ pub fn sm_initiator(value: &summarizer::SmVoteInitiator) -> pb::SmVoteInitiator 
     }
 }
 
+#[must_use]
 pub fn sm_nomination(value: &summarizer::SmNomination) -> pb::SmNomination {
     pb::SmNomination {
         name: value.name.clone(),
@@ -246,6 +254,7 @@ pub fn sm_nomination(value: &summarizer::SmNomination) -> pb::SmNomination {
     }
 }
 
+#[must_use]
 pub fn sm_option(value: &summarizer::SmVoteOption) -> pb::SmVoteOption {
     pb::SmVoteOption {
         name: value.name.clone(),
@@ -254,6 +263,7 @@ pub fn sm_option(value: &summarizer::SmVoteOption) -> pb::SmVoteOption {
     }
 }
 
+#[must_use]
 pub fn position(value: &summarizer::Position) -> pb::Position {
     pb::Position {
         x: value.x,
@@ -263,6 +273,7 @@ pub fn position(value: &summarizer::Position) -> pb::Position {
     }
 }
 
+#[must_use]
 pub fn eye_angles(value: &summarizer::EyeAngles) -> pb::EyeAngles {
     pb::EyeAngles {
         pitch: value.pitch,
@@ -285,6 +296,7 @@ pub fn kill(value: &summarizer::KillEvent) -> pb::KillEvent {
     }
 }
 
+#[must_use]
 pub fn point_capture(value: &summarizer::PointCaptureStart) -> pb::PointCaptureStart {
     pb::PointCaptureStart {
         tick: u32::from(value.tick),

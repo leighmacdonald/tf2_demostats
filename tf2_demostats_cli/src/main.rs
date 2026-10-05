@@ -69,10 +69,18 @@ enum Commands {
         #[arg(long, default_value = tf2_demostats::transcribe::DEFAULT_MODEL, env = "TRANSCRIBE_MODEL", help = "Transcription model ID on the server")]
         transcription_model: String,
 
-        #[arg(long, env = "TRANSCRIBE_API_KEY", help = "Bearer token for the transcription server (if required)")]
+        #[arg(
+            long,
+            env = "TRANSCRIBE_API_KEY",
+            help = "Bearer token for the transcription server (if required)"
+        )]
         transcription_api_key: Option<String>,
 
-        #[arg(long, default_value = "en", help = "Transcription language (empty = auto-detect)")]
+        #[arg(
+            long,
+            default_value = "en",
+            help = "Transcription language (empty = auto-detect)"
+        )]
         language: String,
     },
     #[command(about = "Update the local schema cache")]
@@ -110,7 +118,7 @@ async fn main() -> ExitCode {
             error!("Error: {}", e);
             return ExitCode::FAILURE;
         }
-        Ok(_) => ExitCode::SUCCESS,
+        Ok(()) => ExitCode::SUCCESS,
     }
 }
 async fn exec() -> Result<()> {
@@ -131,7 +139,10 @@ async fn exec() -> Result<()> {
         .with(EnvFilter::from_default_env())
         .init();
     match args.command {
-        Commands::Version => cmd_version().await,
+        Commands::Version => {
+            cmd_version();
+            Ok(())
+        }
         Commands::Parse { schema, demo } => cmd_parse(&schema, demo).await,
         Commands::Voice {
             demo,
@@ -183,7 +194,7 @@ async fn cmd_serve(schema_path: &Path, host: String, port: u16) -> Result<()> {
 }
 
 async fn cmd_parse(schema_path: &Path, demo_paths: Vec<PathBuf>) -> Result<()> {
-    let schema = schema::read(schema_path).await?;
+    let schema = schema::read(schema_path)?;
 
     for mut demo_path in demo_paths {
         let path = demo_path.as_path();
@@ -236,8 +247,7 @@ async fn cmd_voice(
             Some(dir) => dir.clone(),
             None => demo_path
                 .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from(".")),
+                .map_or_else(|| PathBuf::from("."), Path::to_path_buf),
         };
         let stem = demo_path
             .file_stem()
@@ -255,15 +265,14 @@ async fn cmd_voice(
             continue;
         }
         // Mixing requires PCM: decode once from the same capture.
-        let mixed = if !no_mix {
+        let mixed = if no_mix {
+            None
+        } else {
             let pcm = voice::VoiceOutput::from_capture(&capture);
             Some((voice::downmix(&pcm), pcm.sample_rate))
-        } else {
-            None
         };
         let mixed_ref = mixed.as_ref().map(|(s, r)| (s.as_slice(), *r));
-        let written =
-            voice::write_opus_files(&output, mixed_ref, &dir, stem, !only_mix, !no_mix)?;
+        let written = voice::write_opus_files(&output, mixed_ref, &dir, stem, !only_mix, !no_mix)?;
         let frames: usize = output.players.values().map(|p| p.frames.len()).sum();
         info!(
             "Wrote {} opus file(s) for {} ({} speakers, {} frames, {} chunks, {} skipped)",
@@ -367,10 +376,8 @@ async fn cmd_transcribe(
     Ok(transcript_path)
 }
 
-async fn cmd_version() -> Result<()> {
-    println!("tf2_demostats {}", env!("CARGO_PKG_VERSION"));
-
-    Ok(())
+fn cmd_version() {
+    println!("tf2-demostats {}", env!("CARGO_PKG_VERSION"));
 }
 
 async fn cmd_schema(api_key: String, schema_path: &Path) -> Result<()> {

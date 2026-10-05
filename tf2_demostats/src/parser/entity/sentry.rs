@@ -1,20 +1,19 @@
 use crate::{
-    convert_vec,
+    Vec3, convert_vec,
     parser::{
         entity::{Entity, EntityClass, SENTRY_BOX},
-        props::*,
+        props::{BUILDER, OBJECT_MAX_HEALTH, ORIGIN, UPGRADE_LEVEL},
         summarizer::MatchAnalyzerView,
     },
-    Vec3,
 };
 use parry3d::shape::SharedShape;
 use std::any::Any;
 use tf_demo_parser::{
+    ParserState,
     demo::{
         message::packetentities::{EntityId, PacketEntity},
         sendprop::SendPropValue,
     },
-    ParserState,
 };
 use tracing::error;
 
@@ -40,13 +39,15 @@ impl Sentry {
             match (prop.identifier, &prop.value) {
                 (ORIGIN, &SendPropValue::Vector(o)) => patch.origin = Some(convert_vec(o)),
                 (BUILDER, &SendPropValue::Integer(b)) => {
-                    let h = b as u32;
+                    let h = u32::try_from(b).unwrap_or_default();
                     patch.owner = Some(h);
                     if let Some(eid) = game.entity_handles.get(&h) {
                         patch.owner_entity = Some(*eid);
                     }
                 }
-                (UPGRADE_LEVEL, &SendPropValue::Integer(l)) => patch.level = Some(l as u32),
+                (UPGRADE_LEVEL, &SendPropValue::Integer(l)) => {
+                    patch.level = Some(u32::try_from(l).unwrap_or_default());
+                }
                 (OBJECT_MAX_HEALTH, &SendPropValue::Integer(l)) => {
                     patch.is_mini = Some(l == 100);
                 }

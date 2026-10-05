@@ -1,7 +1,10 @@
 use crate::parser::{
     entity::{Entity, EntityClass},
     game::INVALID_HANDLE,
-    props::*,
+    props::{
+        ITEM_DEFINITION, MEDIGUN_CHARGE_LEVEL, MEDIGUN_CHARGE_RELEASED, MEDIGUN_HEALING_TARGET,
+        MODEL, RESET_PARITY, SELF_HANDLE, WEAPON_OWNER,
+    },
     summarizer::{Event, MatchAnalyzerView},
 };
 use std::any::Any;
@@ -41,24 +44,33 @@ impl Weapon {
         let class_name = parser_state
             .server_classes
             .get(<ClassId as Into<usize>>::into(packet.server_class))
-            .map(|s| s.name.to_string())
-            .unwrap_or("UNKNOWN_PROJECTILE".to_string());
+            .map_or("UNKNOWN_PROJECTILE".to_string(), |s| s.name.to_string());
         for prop in packet.props(parser_state) {
             match (prop.identifier, &prop.value) {
                 (MEDIGUN_CHARGE_LEVEL, &SendPropValue::Float(z)) => {
                     patch.charge = Some(z);
                 }
                 (MEDIGUN_CHARGE_RELEASED, &SendPropValue::Integer(b)) => {
-                    patch.charge_released = Some(b == 1)
+                    patch.charge_released = Some(b == 1);
                 }
                 (MEDIGUN_HEALING_TARGET, &SendPropValue::Integer(h)) => {
-                    patch.healing_target = Some(h as u32)
+                    patch.healing_target = Some(u32::try_from(h).unwrap_or_default());
                 }
-                (SELF_HANDLE, &SendPropValue::Integer(h)) => patch.handle = Some(h as u32),
-                (ITEM_DEFINITION, &SendPropValue::Integer(x)) => patch.schema_id = Some(x as u32),
-                (MODEL, &SendPropValue::Integer(x)) => patch.model_id = Some(x as u32),
-                (WEAPON_OWNER, &SendPropValue::Integer(x)) => patch.owner = Some(x as u32),
-                (RESET_PARITY, &SendPropValue::Integer(x)) => patch.reset_parity = Some(x as u32),
+                (SELF_HANDLE, &SendPropValue::Integer(h)) => {
+                    patch.handle = Some(u32::try_from(h).unwrap_or_default());
+                }
+                (ITEM_DEFINITION, &SendPropValue::Integer(x)) => {
+                    patch.schema_id = Some(u32::try_from(x).unwrap_or_default());
+                }
+                (MODEL, &SendPropValue::Integer(x)) => {
+                    patch.model_id = Some(u32::try_from(x).unwrap_or_default());
+                }
+                (WEAPON_OWNER, &SendPropValue::Integer(x)) => {
+                    patch.owner = Some(u32::try_from(x).unwrap_or_default());
+                }
+                (RESET_PARITY, &SendPropValue::Integer(x)) => {
+                    patch.reset_parity = Some(u32::try_from(x).unwrap_or_default());
+                }
 
                 _ => {
                     trace!(
@@ -80,8 +92,7 @@ impl Entity for Weapon {
         let class_name = parser_state
             .server_classes
             .get(<ClassId as Into<usize>>::into(packet.server_class))
-            .map(|s| s.name.to_string())
-            .unwrap_or("UNKNOWN_PROJECTILE".to_string());
+            .map_or("UNKNOWN_PROJECTILE".to_string(), |s| s.name.to_string());
 
         let mut p = WeaponPatch::default();
         Weapon::parse(packet, parser_state, &mut p);

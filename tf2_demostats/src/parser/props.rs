@@ -122,16 +122,10 @@ pub const GRENADE_DEFLECTED: SendPropIdentifier =
 pub const WEAPON_OWNER: SendPropIdentifier =
     SendPropIdentifier::new("DT_BaseCombatWeapon", "m_hOwner");
 
-pub const INITIAL_SPEED: SendPropIdentifier =
-    SendPropIdentifier::new("DT_TFBaseRocket", "m_vInitialVelocity");
 pub const ORIGINAL_LAUNCHER: SendPropIdentifier =
     SendPropIdentifier::new("DT_BaseProjectile", "m_hOriginalLauncher");
 pub const PIPE_TYPE: SendPropIdentifier =
     SendPropIdentifier::new("DT_TFProjectile_Pipebomb", "m_iType");
-pub const ROCKET_ROTATION: SendPropIdentifier =
-    SendPropIdentifier::new("DT_TFBaseRocket", "m_angRotation");
-pub const GRENADE_ROTATION: SendPropIdentifier =
-    SendPropIdentifier::new("DT_TFWeaponBaseGrenadeProj", "m_angRotation");
 pub const DEFLECT_OWNER: SendPropIdentifier =
     SendPropIdentifier::new("DT_TFWeaponBaseGrenadeProj", "m_hDeflectOwner");
 

@@ -3,7 +3,7 @@
 FROM ubuntu:24.04
 ARG TARGETPLATFORM
 WORKDIR /app
-COPY ${TARGETPLATFORM}/tf2_demostats .
+COPY ${TARGETPLATFORM}/tf2-demostats .
 EXPOSE 8811
-ENTRYPOINT ["/app/tf2_demostats"]
+ENTRYPOINT ["/app/tf2-demostats"]
 CMD [ "serve" ]

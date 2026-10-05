@@ -4,16 +4,17 @@ edition = "2024"
 version.workspace = true
 authors.workspace = true
 description.workspace = true
+readme.workspace = true
 license.workspace = true
 
 [dependencies]
-clap = { version = "4.5.60", features = ["derive", "color", "env"] }
-clap_complete = "4.5.66"
+clap = { version = "4.6.7", features = ["derive", "color", "env"] }
+clap_complete = "4.6.11"
 dotenv = "0.15.0"
 tracing = { version = "0.1.44", features = ["release_max_level_info"] }
-tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
-serde_json = "1.0.149"
-tokio = { version = "1.49.0", features = [
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.2", features = [
     "rt",
     "rt-multi-thread",
     "macros",
@@ -23,5 +24,8 @@ tf2_demostats = { path = "../tf2_demostats" }
 tf2_demostats_http = { path = "../tf2_demostats_http" }
 
 [[bin]]
-name = "tf2_demostats"
+name = "tf2-demostats"
 path = "src/main.rs"
+
+[lints]
+workspace = true

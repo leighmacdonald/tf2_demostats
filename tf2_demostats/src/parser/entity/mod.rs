@@ -1,11 +1,11 @@
-use crate::{parser::summarizer::MatchAnalyzerView, Vec3};
+use crate::{Vec3, parser::summarizer::MatchAnalyzerView};
 use optfield::optfield;
 use parry3d::{
     math::Vector,
     shape::{Cuboid, SharedShape},
 };
 use std::any::Any;
-use tf_demo_parser::{demo::message::packetentities::PacketEntity, ParserState};
+use tf_demo_parser::{ParserState, demo::message::packetentities::PacketEntity};
 
 pub mod sentry;
 pub use sentry::*;
@@ -139,10 +139,10 @@ impl Entity for Unknown {
     }
 }
 
-lazy_static::lazy_static! {
-    // TODO: real valuess, switch by sentry level
-    static ref SENTRY_BOX: SharedShape = SharedShape::new(Cuboid::new(Vector::new(49.0, 49.0, 83.0)));
+// TODO: real valuess, switch by sentry level
+pub static SENTRY_BOX: std::sync::LazyLock<SharedShape> =
+    std::sync::LazyLock::new(|| SharedShape::new(Cuboid::new(Vector::new(49.0, 49.0, 83.0))));
 
-    // TODO: real valuess, switch by projectile type
-    static ref PROJECTILE_BOX: SharedShape = SharedShape::new(Cuboid::new(Vector::new(10.0, 10.0, 10.0)));
-}
+// TODO: real valuess, switch by projectile type
+pub static PROJECTILE_BOX: std::sync::LazyLock<SharedShape> =
+    std::sync::LazyLock::new(|| SharedShape::new(Cuboid::new(Vector::new(10.0, 10.0, 10.0))));

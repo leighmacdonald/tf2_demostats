@@ -219,7 +219,7 @@ impl Stats {
     }
 
     pub fn handle_damage_dealt(&mut self, hurt: &PlayerHurtEvent, damage_type: DamageType) {
-        self.damage += hurt.damage_amount as u32;
+        self.damage += u32::from(hurt.damage_amount);
 
         if damage_type == DamageType::Backstab {
             self.backstabs += 1;
@@ -229,7 +229,7 @@ impl Stats {
     }
 
     pub fn handle_damage_taken(&mut self, hurt: &PlayerHurtEvent, damage_type: DamageType) {
-        self.damage_taken += hurt.damage_amount as u32;
+        self.damage_taken += u32::from(hurt.damage_amount);
 
         if damage_type == DamageType::Backstab {
             self.was_backstabbed += 1;

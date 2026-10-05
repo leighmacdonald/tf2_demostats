@@ -17,10 +17,12 @@ pub struct DemoServiceImpl {
 }
 
 impl DemoServiceImpl {
+    #[must_use]
     pub fn new(schema: Arc<tf2_demostats::schema::Schema>) -> Self {
         Self { schema }
     }
 
+    #[must_use]
     pub fn router(schema: Arc<tf2_demostats::schema::Schema>) -> Router {
         Router::new()
             .add_service(Arc::new(Self::new(schema)))
@@ -33,7 +35,12 @@ impl DemoServiceImpl {
     }
 }
 
-#[allow(refining_impl_trait_internal, refining_impl_trait_reachable)]
+// The handler body is synchronous; `async` is part of the generated trait.
+#[allow(
+    refining_impl_trait_internal,
+    refining_impl_trait_reachable,
+    clippy::unused_async_trait_impl
+)]
 impl DemoService for DemoServiceImpl {
     async fn parse_demo(
         &self,
@@ -49,7 +56,7 @@ impl DemoService for DemoServiceImpl {
         if req.demo.len() > MAX_DEMO_BYTES {
             return Err(ConnectError::new(
                 ErrorCode::InvalidArgument,
-                format!("demo exceeds {} bytes", MAX_DEMO_BYTES),
+                format!("demo exceeds {MAX_DEMO_BYTES} bytes"),
             ));
         }
 
