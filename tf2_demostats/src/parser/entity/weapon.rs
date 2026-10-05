@@ -1,5 +1,6 @@
 use crate::parser::{
     entity::{Entity, EntityClass},
+    game::INVALID_HANDLE,
     props::*,
     summarizer::{Event, MatchAnalyzerView},
 };
@@ -21,6 +22,10 @@ pub struct Weapon {
     pub last_high_charge: f32,
     pub charge: f32,
     pub charge_released: bool,
+
+    /// Entity handle of the current heal target (`m_hHealingTarget`),
+    /// or `INVALID_HANDLE` when beaming nobody. Only mediguns carry it.
+    pub healing_target: u32,
 
     pub handle: u32,
     pub owner: u32,
@@ -45,6 +50,9 @@ impl Weapon {
                 }
                 (MEDIGUN_CHARGE_RELEASED, &SendPropValue::Integer(b)) => {
                     patch.charge_released = Some(b == 1)
+                }
+                (MEDIGUN_HEALING_TARGET, &SendPropValue::Integer(h)) => {
+                    patch.healing_target = Some(h as u32)
                 }
                 (SELF_HANDLE, &SendPropValue::Integer(h)) => patch.handle = Some(h as u32),
                 (ITEM_DEFINITION, &SendPropValue::Integer(x)) => patch.schema_id = Some(x as u32),
@@ -83,6 +91,11 @@ impl Entity for Weapon {
             ..Default::default()
         };
         s.merge_opt(p);
+        if s.healing_target == 0 {
+            // Absent prop decodes as 0; normalize to the invalid handle so
+            // "beaming nobody" has one representation.
+            s.healing_target = INVALID_HANDLE;
+        }
         s
     }
 

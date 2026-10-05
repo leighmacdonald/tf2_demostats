@@ -3,8 +3,8 @@ use crate::{
     parser::{
         entity::{self, Entity, ProjectileType},
         game::{
-            Damage, DamageEffect, DamageType, Death, INVALID_HANDLE, PlayerAnimation, RoundState,
-            WeaponId,
+            Damage, DamageEffect, DamageType, Death, INVALID_HANDLE, PlayerAnimation,
+            RoundState, TICK_INTERVAL, WeaponId,
         },
         is_false,
         player::PlayerSummary,
@@ -32,18 +32,18 @@ use tf_demo_parser::{
         data::{DemoTick, MaybeUtf8String, UserInfo},
         gameevent_gen::{
             BuildingHealedEvent, CapperKilledEvent, CrossbowHealEvent,
-            EnvironmentalDeathEvent, KilledCappingPlayerEvent, MedicDeathEvent,
-            ObjectDeflectedEvent, ObjectDetonatedEvent, ObjectRemovedEvent,
-            PayloadPushedEvent, PlayerBuiltObjectEvent, PlayerCarryObjectEvent,
-            PlayerDeathEvent, PlayerDropObjectEvent, PlayerExtinguishedEvent,
-            PlayerHealOnHitEvent, PlayerHealedEvent, PlayerHurtEvent,
-            PlayerTeleportedEvent, PlayerUpgradedObjectEvent,
-            ProjectileDirectHitEvent, TeamPlayCaptureBlockedEvent,
-            TeamPlayPointCapturedEvent, TeamPlayPointStartCaptureEvent,
-            VoteCastEvent, VoteChangedEvent, VoteFailedEvent, VoteOptionsEvent,
-            VotePassedEvent, VoteStartedEvent,
+            EnvironmentalDeathEvent, GameEventType, ItemPickupEvent,
+            KilledCappingPlayerEvent, MedicDeathEvent, ObjectDeflectedEvent,
+            ObjectDetonatedEvent, ObjectRemovedEvent, PayloadPushedEvent,
+            PlayerBuiltObjectEvent, PlayerCarryObjectEvent, PlayerDeathEvent,
+            PlayerDropObjectEvent, PlayerExtinguishedEvent, PlayerHealOnHitEvent,
+            PlayerHealedEvent, PlayerHurtEvent, PlayerTeleportedEvent,
+            PlayerUpgradedObjectEvent, ProjectileDirectHitEvent,
+            TeamPlayCaptureBlockedEvent, TeamPlayPointCapturedEvent,
+            TeamPlayPointStartCaptureEvent, VoteCastEvent, VoteChangedEvent,
+            VoteFailedEvent, VoteOptionsEvent, VotePassedEvent, VoteStartedEvent,
         },
-        gamevent::GameEvent,
+        gamevent::{GameEvent, GameEventValue, RawGameEvent},
         message::{
             Message, NetTickMessage,
             gameevent::GameEventMessage,
@@ -73,6 +73,45 @@ pub struct DemoSummary {
     pub sourcemod_votes: Vec<SourceModVote>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub point_captures: Vec<PointCaptureStart>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub kills: Vec<KillEvent>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy)]
+pub struct Position {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy)]
+pub struct EyeAngles {
+    pub pitch: f32,
+    pub yaw: f32,
+}
+
+/// One kill with both players' world position and eye angles as of the
+/// death tick. Positions/angles come from the player entities, so they
+/// are absent when the entity isn't tracked (e.g. out of STV PVS).
+/// Suicides record the same player on both sides; world kills have no
+/// killer. Feigned deaths (spy) are not recorded.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct KillEvent {
+    pub tick: DemoTick,
+    /// Steamid of the killer; `None` for world/environment kills.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub killer: Option<String>,
+    /// Steamid of the victim.
+    pub victim: String,
+    pub weapon: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub killer_pos: Option<Position>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub victim_pos: Option<Position>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub killer_angles: Option<EyeAngles>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub victim_angles: Option<EyeAngles>,
 }
 
 /// A `teamplay_point_startcapture` event: a capture attempt began.
@@ -291,6 +330,8 @@ pub struct MatchAnalyzer<'a> {
 
     point_captures: Vec<PointCaptureStart>,
 
+    kills: Vec<KillEvent>,
+
     sm_votes: Vec<SourceModVote>,
     sm_current: Option<SourceModVote>,
     sm_pending_scramble: Vec<SmVoteInitiator>,
@@ -392,7 +433,7 @@ impl MatchAnalyzerView<'_> {
 
 #[derive(Debug)]
 pub enum Event {
-    Death(Box<PlayerDeathEvent>),
+    Death { death: Box<PlayerDeathEvent>, tick: DemoTick },
     Hurt(PlayerHurtEvent),
     MedigunCharged(u32),
 }
@@ -530,6 +571,29 @@ fn parse_capper_entities(cappers: &MaybeUtf8String) -> Vec<u32> {
     bytes.iter().map(|b| *b as u32).collect()
 }
 
+/// Positional decode of `take_health` raw values:
+/// `[amount_healed, health_after, player_entity]`.
+fn parse_take_health(values: &[GameEventValue]) -> Option<(u32, u32)> {
+    match values {
+        [GameEventValue::Long(amount), GameEventValue::Long(_), GameEventValue::Long(entity)] => {
+            Some((*entity, *amount))
+        }
+        _ => None,
+    }
+}
+
+/// Shape-check for `ammo_pickup` raw values: `[ammo_type 1-6, _, _]`.
+/// The event carries no player id, so per-player ammo stats come from
+/// `item_pickup` instead; this only validates the observed shape.
+fn is_ammo_pickup(values: &[GameEventValue]) -> bool {
+    match values {
+        [GameEventValue::Long(kind), GameEventValue::Long(_), GameEventValue::Long(_)] => {
+            (1..=6).contains(kind)
+        }
+        _ => false,
+    }
+}
+
 impl<'a> MatchAnalyzer<'a> {
     pub fn new(schema: &'a Schema) -> Self {
         Self {
@@ -569,6 +633,7 @@ impl<'a> MatchAnalyzer<'a> {
             vote_sessions: Default::default(),
             finished_votes: Default::default(),
             point_captures: Default::default(),
+            kills: Default::default(),
             sm_votes: Default::default(),
             sm_current: Default::default(),
             sm_pending_scramble: Default::default(),
@@ -844,7 +909,7 @@ impl<'a> MatchAnalyzer<'a> {
             && class_name != "CTFDroppedWeapon"
             && class_name != "CBaseDoor"
             && !(class_name == "CTFPlayer"
-                && packet.update_type == UpdateType::Preserve
+                && packet.update_type == UpdateType::Delta
                 && packet.props.len() == 1
                 && packet.props[0].identifier == SIM_TIME)
         {
@@ -902,7 +967,7 @@ impl<'a> MatchAnalyzer<'a> {
                 };
                 self.entities[eid] = Some(e);
             }
-            UpdateType::Preserve => {
+            UpdateType::Delta => {
                 let Some(ref e) = self.entities[eid] else {
                     error!(
                         "Preserve update for unknown entity {} in {:?}",
@@ -1189,7 +1254,60 @@ impl<'a> MatchAnalyzer<'a> {
             .and_then(|b| b.player())
     }
 
-    pub fn handle_player_death(&mut self, death: &PlayerDeathEvent) {
+    /// World position + eye angles of a player by steamid, if their
+    /// entity is currently tracked.
+    fn player_pos_angles(&self, steamid: &str) -> (Option<Position>, Option<EyeAngles>) {
+        let Some(entity) = self
+            .player_summaries
+            .get(steamid)
+            .and_then(|s| self.get_player(&s.entity_id))
+        else {
+            return (None, None);
+        };
+        (
+            Some(Position {
+                x: entity.origin.x,
+                y: entity.origin.y,
+                z: entity.origin.z,
+            }),
+            Some(EyeAngles {
+                pitch: entity.eye.x,
+                yaw: entity.eye.y,
+            }),
+        )
+    }
+
+    fn record_kill_event(
+        &mut self,
+        death: &PlayerDeathEvent,
+        tick: DemoTick,
+        victim_steamid: &str,
+    ) {
+        let killer = if death.attacker == 0 {
+            None
+        } else {
+            self.user_id_to_steam_id
+                .get(&UserId::from(death.attacker as u32))
+                .cloned()
+        };
+        let (killer_pos, killer_angles) = killer
+            .as_deref()
+            .map(|k| self.player_pos_angles(k))
+            .unwrap_or((None, None));
+        let (victim_pos, victim_angles) = self.player_pos_angles(victim_steamid);
+        self.kills.push(KillEvent {
+            tick,
+            killer,
+            victim: victim_steamid.to_string(),
+            weapon: death.weapon.to_string(),
+            killer_pos,
+            victim_pos,
+            killer_angles,
+            victim_angles,
+        });
+    }
+
+    pub fn handle_player_death(&mut self, death: &PlayerDeathEvent, tick: DemoTick) {
         debug!(
             "Player death {death:?} {} {:?}",
             self.waiting_for_players, self.round_state
@@ -1236,6 +1354,7 @@ impl<'a> MatchAnalyzer<'a> {
                 } else {
                     error!("Unknown suicider steamid for user_id: {}", attacker_user_id);
                 }
+                self.record_kill_event(death, tick, &steamid);
             } else {
                 error!(
                     "Unknown suicider steamid mapping for user_id: {}",
@@ -1287,6 +1406,10 @@ impl<'a> MatchAnalyzer<'a> {
         victim.handle_death(self.round_state, flags);
 
         let airshot = victim.in_air() && (self.tick - victim.started_flying > 16);
+
+        if !feigned {
+            self.record_kill_event(death, tick, &victim_steamid);
+        }
 
         let attacker_is_world = death.attacker == 0;
         let attacker_is_world_wep = death.weapon_def_index == 0xffff;
@@ -1729,6 +1852,59 @@ impl<'a> MatchAnalyzer<'a> {
                 "Could not lookup player with user id {} in object_detonated",
                 e.user_id
             );
+        }
+    }
+
+    pub fn handle_item_pickup(&mut self, e: &ItemPickupEvent) {
+        trace!("Item pickup {e:?}");
+        // Ammo packs only; health kits are covered with amounts by
+        // take_health (see handle_unknown_event).
+        if !e.item.to_string().contains("ammo") {
+            return;
+        }
+        if let Some(player) = self.player_by_user_id_mut(e.user_id) {
+            player.handle_ammo_pack();
+        } else {
+            error!("Could not lookup player with user id {} in item_pickup", e.user_id);
+        }
+    }
+
+    pub fn handle_take_health(&mut self, entity: u32, amount: u32) {
+        if let Some(player) = self.player_by_entity_mut(entity) {
+            player.handle_health_pack(amount);
+        } else {
+            error!("Could not lookup player with entity id {entity} in take_health");
+        }
+    }
+
+    /// Events the pinned tf-demo-parser version has no typed struct for.
+    /// Currently decoded positionally: `take_health` is
+    /// `[amount, health_after, player_entity]` (verified against
+    /// co-firing `player_healed` events); `ammo_pickup` is
+    /// `[ammo_type 1-6, current, max]` with no player id, so it cannot be
+    /// attributed per player (per-player ammo comes from `item_pickup`
+    /// above instead) and is only validated here.
+    pub fn handle_unknown_event(&mut self, raw: &RawGameEvent) {
+        let GameEventType::Unknown(name) = &raw.event_type else {
+            return;
+        };
+        match name.as_str() {
+            "take_health" => {
+                if let Some((entity, amount)) = parse_take_health(&raw.values) {
+                    trace!("take_health entity={entity} amount={amount}");
+                    self.handle_take_health(entity, amount);
+                } else {
+                    error!("Unparseable take_health values: {:?}", raw.values);
+                }
+            }
+            "ammo_pickup" => {
+                if !is_ammo_pickup(&raw.values) {
+                    error!("Unparseable ammo_pickup values: {:?}", raw.values);
+                }
+            }
+            _ => {
+                trace!("Unhandled unknown game event: {name}");
+            }
         }
     }
 
@@ -2346,7 +2522,14 @@ impl<'a> MatchAnalyzer<'a> {
 
     pub fn handle_tick(&mut self, tick: &DemoTick, server_tick: Option<&NetTickMessage>) {
         if *tick != self.tick {
-            self.on_tick();
+            let old = u32::from(self.tick);
+            // First tick ever seen: no elapsed interval to account for.
+            let delta = if old == 0 {
+                0
+            } else {
+                u32::from(*tick).saturating_sub(old)
+            };
+            self.on_tick(delta);
         }
 
         self.hurts.drain(..);
@@ -2373,7 +2556,7 @@ impl<'a> MatchAnalyzer<'a> {
     // Do processing at the end of a tick, once all entities have been
     // processed. This is important when referring to entities that
     // may have been both created and referenced in the same packet.
-    fn on_tick(&mut self) {
+    fn on_tick(&mut self, delta_ticks: u32) {
         for v in self.player_summaries.values() {
             let Some(e) = self.get_player(&v.entity_id) else {
                 continue;
@@ -2389,8 +2572,8 @@ impl<'a> MatchAnalyzer<'a> {
         let t: Vec<_> = self.tick_events.drain(..).collect();
         for e in t {
             match e {
-                Event::Death(death) => {
-                    self.handle_player_death(&death);
+                Event::Death { death, tick } => {
+                    self.handle_player_death(&death, tick);
                 }
                 Event::Hurt(hurt) => {
                     self.handle_player_hurt(&hurt);
@@ -2426,7 +2609,52 @@ impl<'a> MatchAnalyzer<'a> {
             }
         }
 
+        if delta_ticks > 0 {
+            self.accumulate_heal_targets(delta_ticks);
+        }
+
         self.explosions.clear();
+    }
+
+    /// Credit medigun beam time since the last tick. Any weapon entity with
+    /// a live `m_hHealingTarget` is an actively-beaming medigun (only
+    /// mediguns carry the prop); time is split per (medic, target) pair.
+    fn accumulate_heal_targets(&mut self, delta_ticks: u32) {
+        let seconds = delta_ticks as f32 * TICK_INTERVAL;
+        let mut beams = Vec::new();
+        for (handle, uid) in &self.weapon_owners {
+            let Some(entity) = self
+                .entity_handles
+                .get(handle)
+                .and_then(|eid| self.entities.get(usize::from(*eid)))
+                .and_then(|e| e.as_ref())
+            else {
+                continue;
+            };
+            let Some(weapon) = entity.weapon() else {
+                continue;
+            };
+            if weapon.healing_target == INVALID_HANDLE {
+                continue;
+            }
+            let medic = self.user_id_to_steam_id.get(uid).cloned();
+            let target = self
+                .entity_handles
+                .get(&weapon.healing_target)
+                .and_then(|eid| self.user_entities.get(eid))
+                .and_then(|tuid| self.user_id_to_steam_id.get(tuid))
+                .cloned();
+            if let (Some(medic), Some(target)) = (medic, target)
+                && medic != target
+            {
+                beams.push((medic, target));
+            }
+        }
+        for (medic, target) in beams {
+            if let Some(summary) = self.player_summaries.get_mut(&medic) {
+                summary.handle_heal_target(&target, seconds);
+            }
+        }
     }
 
     fn handle_user_message(&mut self, msg: &UserMessage) {
@@ -2701,7 +2929,10 @@ impl MessageHandler for MatchAnalyzer<'_> {
             }
             Message::GameEvent(GameEventMessage { event, .. }) => match event {
                 GameEvent::PlayerDeath(death) => {
-                    self.tick_events.push(Event::Death(death.clone()));
+                    self.tick_events.push(Event::Death {
+                        death: death.clone(),
+                        tick: self.tick,
+                    });
                 }
                 GameEvent::PlayerHurt(hurt) => {
                     self.tick_events.push(Event::Hurt(hurt.clone()));
@@ -2738,6 +2969,9 @@ impl MessageHandler for MatchAnalyzer<'_> {
                 GameEvent::PlayerDropObject(e) => self.handle_player_drop_object(e),
                 GameEvent::ObjectRemoved(e) => self.handle_object_removed(e),
                 GameEvent::ObjectDetonated(e) => self.handle_object_detonated(e),
+
+                GameEvent::ItemPickup(e) => self.handle_item_pickup(e),
+                GameEvent::Unknown(raw) => self.handle_unknown_event(raw),
 
                 GameEvent::TeamPlayWinPanel(e) => {
                     for entity_id_val in [e.player_1, e.player_2, e.player_3] {
@@ -3083,6 +3317,7 @@ impl MessageHandler for MatchAnalyzer<'_> {
             votes,
             sourcemod_votes: self.sm_votes,
             point_captures: self.point_captures,
+            kills: self.kills,
         }
     }
 }
@@ -3180,7 +3415,7 @@ mod tests {
         let player_entity_msg = create_mock_player_entity_enter_message(1, player_class_id);
         analyzer.handle_message(&player_entity_msg, DemoTick::from(1), &parser_state);
 
-        analyzer.on_tick();
+        analyzer.on_tick(1);
 
         let summary = analyzer.into_output(&parser_state);
 
@@ -3215,7 +3450,7 @@ mod tests {
         analyzer.handle_string_entry("userinfo", 0, &user_info_s_entry1, &parser_state);
         let player_entity_msg1 = create_mock_player_entity_enter_message(2, player_class_id);
         analyzer.handle_message(&player_entity_msg1, DemoTick::from(10), &parser_state);
-        analyzer.on_tick();
+        analyzer.on_tick(1);
 
         // TODO: Disconnect via entity destroyed
 
@@ -3224,7 +3459,7 @@ mod tests {
         analyzer.handle_string_entry("userinfo", 1, &user_info_s_entry2, &parser_state);
         let player_entity_msg2 = create_mock_player_entity_enter_message(3, player_class_id);
         analyzer.handle_message(&player_entity_msg2, DemoTick::from(100), &parser_state);
-        analyzer.on_tick();
+        analyzer.on_tick(1);
 
         let summary = analyzer.into_output(&parser_state);
 
@@ -3776,6 +4011,217 @@ mod tests {
         let parser_state = ParserState::new(0, |_| true, false);
         let summary = analyzer.into_output(&parser_state);
         assert_eq!(summary.point_captures.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_take_health_and_ammo_shapes() {
+        assert_eq!(
+            parse_take_health(&[
+                GameEventValue::Long(88),
+                GameEventValue::Long(90),
+                GameEventValue::Long(7),
+            ]),
+            Some((7, 88))
+        );
+        assert!(parse_take_health(&[GameEventValue::Long(1)]).is_none());
+        assert!(parse_take_health(&[]).is_none());
+
+        assert!(is_ammo_pickup(&[
+            GameEventValue::Long(1),
+            GameEventValue::Long(26),
+            GameEventValue::Long(200),
+        ]));
+        assert!(!is_ammo_pickup(&[
+            GameEventValue::Long(7),
+            GameEventValue::Long(1),
+            GameEventValue::Long(1),
+        ]));
+        assert!(!is_ammo_pickup(&[GameEventValue::Long(1)]));
+    }
+
+    #[test]
+    fn test_item_pickup_and_take_health_handlers() {
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+        let parser_state = ParserState::new(0, |_| true, false);
+        // Scout userid 24 on entity slot 2 (seed stored +1).
+        let entry = create_mock_user_info("touc", "STEAM_0:1:700", 24, 1);
+        analyzer.handle_string_entry("userinfo", 0, &entry, &parser_state);
+
+        analyzer.handle_item_pickup(&ItemPickupEvent {
+            user_id: 24,
+            item: "ammopack_medium".into(),
+        });
+        analyzer.handle_item_pickup(&ItemPickupEvent {
+            user_id: 24,
+            item: "tf_ammo_pack".into(),
+        });
+        analyzer.handle_item_pickup(&ItemPickupEvent {
+            user_id: 24,
+            item: "medkit_medium".into(),
+        });
+
+        // take_health as decoded from a RawGameEvent: [amount, health, entity].
+        analyzer.handle_unknown_event(&RawGameEvent {
+            event_type: GameEventType::Unknown("take_health".to_string()),
+            values: vec![
+                GameEventValue::Long(88),
+                GameEventValue::Long(90),
+                GameEventValue::Long(2),
+            ],
+        });
+        // Malformed shapes and unattributable events must not panic.
+        analyzer.handle_unknown_event(&RawGameEvent {
+            event_type: GameEventType::Unknown("take_health".to_string()),
+            values: vec![GameEventValue::Long(1)],
+        });
+        analyzer.handle_unknown_event(&RawGameEvent {
+            event_type: GameEventType::Unknown("ammo_pickup".to_string()),
+            values: vec![
+                GameEventValue::Long(1),
+                GameEventValue::Long(26),
+                GameEventValue::Long(200),
+            ],
+        });
+        analyzer.handle_unknown_event(&RawGameEvent {
+            event_type: GameEventType::Unknown("weapon_equipped".to_string()),
+            values: vec![],
+        });
+
+        let scout = analyzer.player_summaries.get("STEAM_0:1:700").unwrap();
+        assert_eq!(scout.stats.ammo_packs, 2);
+        assert_eq!(scout.stats.health_packs, 1);
+        assert_eq!(scout.stats.health_pack_healing, 88);
+    }
+
+    #[test]
+    fn test_heal_target_accumulation() {
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+        let parser_state = ParserState::new(0, |_| true, false);
+        // Medic userid 42 and patient userid 37 (seeds stored +1).
+        let medic = create_mock_user_info("Scourage", "STEAM_0:1:800", 42, 15);
+        analyzer.handle_string_entry("userinfo", 0, &medic, &parser_state);
+        let patient = create_mock_user_info("Crispy", "STEAM_0:1:801", 37, 14);
+        analyzer.handle_string_entry("userinfo", 1, &patient, &parser_state);
+
+        // Wire a beaming medigun: weapon handle 4000 owned by the medic,
+        // healing target handle 5000 on the patient's entity.
+        let medigun_handle = 4000u32;
+        let target_handle = 5000u32;
+        analyzer
+            .entity_handles
+            .insert(medigun_handle, EntityId::from(100u32));
+        analyzer
+            .entity_handles
+            .insert(target_handle, EntityId::from(15u32));
+        analyzer
+            .weapon_owners
+            .insert(medigun_handle, UserId::from(42u16));
+        analyzer.entities[100] = Some(Box::new(entity::Weapon {
+            class_name: "CWeaponMedigun".to_string(),
+            handle: medigun_handle,
+            owner: 0,
+            healing_target: target_handle,
+            ..Default::default()
+        }));
+
+        // Two seconds of beam time.
+        analyzer.on_tick(133);
+        let medic = analyzer.player_summaries.get("STEAM_0:1:800").unwrap();
+        let secs = medic.heal_targets.get("STEAM_0:1:801").copied().unwrap_or(0.0);
+        assert!((secs - 133.0 / 66.666_667).abs() < 0.01, "got {secs}");
+
+        // Beam dropped: no further accumulation.
+        analyzer.entities[100] = None;
+        analyzer.on_tick(133);
+        let medic = analyzer.player_summaries.get("STEAM_0:1:800").unwrap();
+        let secs = medic.heal_targets.get("STEAM_0:1:801").copied().unwrap_or(0.0);
+        assert!((secs - 133.0 / 66.666_667).abs() < 0.01, "got {secs}");
+    }
+
+    #[test]
+    fn test_kill_event_positions_and_angles() {
+        use crate::{Vec2, Vec3};
+
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+        let parser_state = ParserState::new(0, |_| true, false);
+        // Killer userid 30 / victim userid 35 (seeds stored +1).
+        let killer_info = create_mock_user_info("Killer", "STEAM_0:1:900", 30, 7);
+        analyzer.handle_string_entry("userinfo", 0, &killer_info, &parser_state);
+        let victim_info = create_mock_user_info("Victim", "STEAM_0:1:901", 35, 12);
+        analyzer.handle_string_entry("userinfo", 1, &victim_info, &parser_state);
+
+        // Place both player entities with known origin/eye state.
+        let mut killer_e = entity::Player {
+            origin: Vec3::new(100.0, 200.0, 300.0),
+            eye: Vec2::new(10.0, 90.0),
+            ..Default::default()
+        };
+        killer_e.user_id = UserId::from(30u16);
+        let mut victim_e = entity::Player {
+            origin: Vec3::new(400.0, 500.0, 600.0),
+            eye: Vec2::new(-5.0, 270.0),
+            ..Default::default()
+        };
+        victim_e.user_id = UserId::from(35u16);
+        analyzer.entities[8] = Some(Box::new(killer_e));
+        analyzer.entities[13] = Some(Box::new(victim_e));
+
+        let death = PlayerDeathEvent {
+            user_id: 35,
+            victim_ent_index: 13,
+            inflictor_ent_index: 0,
+            attacker: 30,
+            weapon: "scattergun".into(),
+            weapon_id: 0,
+            damage_bits: 0,
+            custom_kill: 0,
+            assister: 0,
+            weapon_log_class_name: "scattergun".into(),
+            stun_flags: 0,
+            death_flags: 0,
+            silent_kill: false,
+            player_penetrate_count: 0,
+            assister_fallback: "".into(),
+            kill_streak_total: 0,
+            kill_streak_wep: 0,
+            kill_streak_assist: 0,
+            kill_streak_victim: 0,
+            ducks_streaked: 0,
+            duck_streak_total: 0,
+            duck_streak_assist: 0,
+            duck_streak_victim: 0,
+            rocket_jump: false,
+            weapon_def_index: 0,
+            crit_type: 0,
+        };
+        analyzer.tick = DemoTick::from(5000);
+        analyzer.record_kill_event(&death, DemoTick::from(5000), "STEAM_0:1:901");
+
+        assert_eq!(analyzer.kills.len(), 1);
+        let kill = &analyzer.kills[0];
+        assert_eq!(u32::from(kill.tick), 5000);
+        assert_eq!(kill.killer.as_deref(), Some("STEAM_0:1:900"));
+        assert_eq!(kill.victim, "STEAM_0:1:901");
+        assert_eq!(kill.weapon, "scattergun");
+        let kp = kill.killer_pos.unwrap();
+        assert_eq!((kp.x, kp.y, kp.z), (100.0, 200.0, 300.0));
+        let vp = kill.victim_pos.unwrap();
+        assert_eq!((vp.x, vp.y, vp.z), (400.0, 500.0, 600.0));
+        let ka = kill.killer_angles.unwrap();
+        assert_eq!((ka.pitch, ka.yaw), (10.0, 90.0));
+        let va = kill.victim_angles.unwrap();
+        assert_eq!((va.pitch, va.yaw), (-5.0, 270.0));
+
+        // World kill: killer absent but victim recorded.
+        let mut world_death = death.clone();
+        world_death.attacker = 0;
+        analyzer.record_kill_event(&world_death, DemoTick::from(5100), "STEAM_0:1:901");
+        assert_eq!(analyzer.kills.len(), 2);
+        assert_eq!(analyzer.kills[1].killer, None);
+        assert_eq!(u32::from(analyzer.kills[1].tick), 5100);
     }
 
     #[test]

@@ -106,6 +106,9 @@ pub fn stats(value: &tf2_demostats::parser::stats::Stats) -> pb::Stats {
         object_dropped: value.object_dropped,
         object_removed: value.object_removed,
         object_detonated: value.object_detonated,
+        ammo_packs: value.ammo_packs,
+        health_packs: value.health_packs,
+        health_pack_healing: value.health_pack_healing,
         ..Default::default()
     }
 }
@@ -150,6 +153,11 @@ pub fn player(value: &tf2_demostats::parser::player::PlayerSummary) -> pb::Playe
         is_fake_player: value.is_fake_player,
         is_hl_tv: value.is_hl_tv,
         is_replay: value.is_replay,
+        heal_targets: value
+            .heal_targets
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect(),
         ..Default::default()
     }
 }
@@ -246,6 +254,37 @@ pub fn sm_option(value: &summarizer::SmVoteOption) -> pb::SmVoteOption {
     }
 }
 
+pub fn position(value: &summarizer::Position) -> pb::Position {
+    pb::Position {
+        x: value.x,
+        y: value.y,
+        z: value.z,
+        ..Default::default()
+    }
+}
+
+pub fn eye_angles(value: &summarizer::EyeAngles) -> pb::EyeAngles {
+    pb::EyeAngles {
+        pitch: value.pitch,
+        yaw: value.yaw,
+        ..Default::default()
+    }
+}
+
+pub fn kill(value: &summarizer::KillEvent) -> pb::KillEvent {
+    pb::KillEvent {
+        tick: u32::from(value.tick),
+        killer: value.killer.clone(),
+        victim: value.victim.clone(),
+        weapon: value.weapon.clone(),
+        killer_pos: value.killer_pos.as_ref().map(position).into(),
+        victim_pos: value.victim_pos.as_ref().map(position).into(),
+        killer_angles: value.killer_angles.as_ref().map(eye_angles).into(),
+        victim_angles: value.victim_angles.as_ref().map(eye_angles).into(),
+        ..Default::default()
+    }
+}
+
 pub fn point_capture(value: &summarizer::PointCaptureStart) -> pb::PointCaptureStart {
     pb::PointCaptureStart {
         tick: u32::from(value.tick),
@@ -290,6 +329,7 @@ pub fn demo_output(value: &DemoOutput) -> pb::DemoOutput {
                 .iter()
                 .map(point_capture)
                 .collect(),
+            kills: value.summary.kills.iter().map(kill).collect(),
             ..Default::default()
         }),
         ..Default::default()

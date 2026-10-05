@@ -66,6 +66,11 @@ pub struct PlayerSummary {
     #[serde(skip_serializing_if = "is_zero")]
     pub captures_blocked: u32,
 
+    /// Medigun beam time per heal target (steamid -> seconds), accumulated
+    /// from `m_hHealingTarget` while the beam is connected.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub heal_targets: HashMap<String, f32>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scoreboard_damage: Option<u32>,
 
@@ -242,6 +247,23 @@ impl PlayerSummary {
         self.class_stats().handle_capture_blocked();
     }
 
+    pub fn handle_heal_target(&mut self, target_steamid: &str, seconds: f32) {
+        *self
+            .heal_targets
+            .entry(target_steamid.to_string())
+            .or_default() += seconds;
+    }
+
+    pub fn handle_ammo_pack(&mut self) {
+        self.stats.handle_ammo_pack();
+        self.class_stats().handle_ammo_pack();
+    }
+
+    pub fn handle_health_pack(&mut self, amount: u32) {
+        self.stats.handle_health_pack(amount);
+        self.class_stats().handle_health_pack(amount);
+    }
+
     pub fn handle_heal_given(&mut self, amount: u32) {
         self.stats.handle_heal_given(amount);
         self.class_stats().handle_heal_given(amount);
@@ -372,6 +394,7 @@ impl PlayerSummary {
         self.suicides = 0; // Reset suicides per round
         self.captures = 0;
         self.captures_blocked = 0;
+        self.heal_targets.clear();
         // charge and kritzed are transient states, not long-term stats to be reset here.
         // points, bonus_points, scoreboard_kills, scoreboard_assists, scoreboard_deaths, scoreboard_damage
         // are generally cumulative or snapshot from game messages, not reset here unless explicitly required
