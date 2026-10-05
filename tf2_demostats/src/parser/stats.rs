@@ -170,6 +170,16 @@ pub struct Stats {
     pub object_removed: u32,
     #[serde(skip_serializing_if = "is_zero")]
     pub object_detonated: u32,
+
+    // Ammo pack pickups (ItemPickup with ammo-ish names).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub ammo_packs: u32,
+
+    // Health-kit pickups (take_health, attributed via player entity).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub health_packs: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub health_pack_healing: u32,
 }
 
 impl Stats {
@@ -402,5 +412,14 @@ impl Stats {
 
     pub fn handle_object_detonated(&mut self) {
         self.object_detonated += 1;
+    }
+
+    pub fn handle_ammo_pack(&mut self) {
+        self.ammo_packs += 1;
+    }
+
+    pub fn handle_health_pack(&mut self, amount: u32) {
+        self.health_packs += 1;
+        self.health_pack_healing += amount;
     }
 }

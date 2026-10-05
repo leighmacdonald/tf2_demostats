@@ -23,6 +23,9 @@ pub enum RoundState {
 
 pub const INVALID_HANDLE: u32 = 0x1fffff;
 
+/// Seconds per demo tick (TF2 runs at ~66.67 ticks/s).
+pub const TICK_INTERVAL: f32 = 1.0 / 66.666_667;
+
 #[derive(
     Copy, Clone, Deserialize, Serialize, IntoPrimitive, TryFromPrimitive, PartialEq, Debug, Default,
 )]

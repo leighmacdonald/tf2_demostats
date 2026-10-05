@@ -4,6 +4,8 @@ pub const MEDIGUN_CHARGE_LEVEL: SendPropIdentifier =
     SendPropIdentifier::new("DT_TFWeaponMedigunDataNonLocal", "m_flChargeLevel");
 pub const MEDIGUN_CHARGE_RELEASED: SendPropIdentifier =
     SendPropIdentifier::new("DT_WeaponMedigun", "m_bChargeRelease");
+pub const MEDIGUN_HEALING_TARGET: SendPropIdentifier =
+    SendPropIdentifier::new("DT_WeaponMedigun", "m_hHealingTarget");
 pub const SELF_HANDLE: SendPropIdentifier =
     SendPropIdentifier::new("DT_AttributeContainer", "m_hOuter");
 pub const ITEM_DEFINITION: SendPropIdentifier =

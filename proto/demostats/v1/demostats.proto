@@ -46,6 +46,7 @@ message DemoSummary {
   repeated VoteSummary votes = 3;
   repeated SourceModVote sourcemod_votes = 4;
   repeated PointCaptureStart point_captures = 5;
+  repeated KillEvent kills = 6;
 }
 
 message ChatMessage {
@@ -99,6 +100,8 @@ message PlayerSummary {
   bool is_fake_player = 19;
   bool is_hl_tv = 20;
   bool is_replay = 21;
+  // Medigun beam seconds per heal target steamid.
+  map<string, float> heal_targets = 22;
 }
 
 message ClassStats {
@@ -161,6 +164,9 @@ message Stats {
   uint32 object_dropped = 52;
   uint32 object_removed = 53;
   uint32 object_detonated = 54;
+  uint32 ammo_packs = 55;
+  uint32 health_packs = 56;
+  uint32 health_pack_healing = 57;
 }
 
 enum Team {
@@ -263,4 +269,29 @@ message PointCaptureStart {
   repeated string cappers = 6;
   // Expected seconds to cap from this event.
   float cap_time = 7;
+}
+
+message Position {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+}
+
+message EyeAngles {
+  // m_angEyeAngles[0] (pitch) and [1] (yaw).
+  float pitch = 1;
+  float yaw = 2;
+}
+
+message KillEvent {
+  uint32 tick = 1;
+  // Steamid of the killer; absent for world/environment kills.
+  optional string killer = 2;
+  // Steamid of the victim.
+  string victim = 3;
+  string weapon = 4;
+  optional Position killer_pos = 5;
+  optional Position victim_pos = 6;
+  optional EyeAngles killer_angles = 7;
+  optional EyeAngles victim_angles = 8;
 }
