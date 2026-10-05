@@ -17,6 +17,7 @@ builds:
   - id: cli-linux
     builder: rust
     command: build
+    binary: tf2-demostats
     targets:
       - x86_64-unknown-linux-gnu
     flags:
@@ -32,6 +33,7 @@ builds:
   - id: cli-windows
     builder: rust
     command: build
+    binary: tf2-demostats
     targets:
       - x86_64-pc-windows-gnu
     flags:
