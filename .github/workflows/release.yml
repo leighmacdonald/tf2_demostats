@@ -27,7 +27,7 @@ jobs:
           targets: x86_64-pc-windows-gnu
 
       - name: MinGW cross toolchain (Windows builds)
-        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64 libopus-dev pkg-config protobuf-compiler
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
