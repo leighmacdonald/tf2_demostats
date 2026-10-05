@@ -31,9 +31,17 @@ use tf_demo_parser::{
     demo::{
         data::{DemoTick, MaybeUtf8String, UserInfo},
         gameevent_gen::{
-            PlayerDeathEvent, PlayerHurtEvent, TeamPlayCaptureBlockedEvent,
-            TeamPlayPointCapturedEvent, VoteCastEvent, VoteChangedEvent, VoteFailedEvent,
-            VoteOptionsEvent, VotePassedEvent, VoteStartedEvent,
+            BuildingHealedEvent, CapperKilledEvent, CrossbowHealEvent,
+            EnvironmentalDeathEvent, KilledCappingPlayerEvent, MedicDeathEvent,
+            ObjectDeflectedEvent, ObjectDetonatedEvent, ObjectRemovedEvent,
+            PayloadPushedEvent, PlayerBuiltObjectEvent, PlayerCarryObjectEvent,
+            PlayerDeathEvent, PlayerDropObjectEvent, PlayerExtinguishedEvent,
+            PlayerHealOnHitEvent, PlayerHealedEvent, PlayerHurtEvent,
+            PlayerTeleportedEvent, PlayerUpgradedObjectEvent,
+            ProjectileDirectHitEvent, TeamPlayCaptureBlockedEvent,
+            TeamPlayPointCapturedEvent, TeamPlayPointStartCaptureEvent,
+            VoteCastEvent, VoteChangedEvent, VoteFailedEvent, VoteOptionsEvent,
+            VotePassedEvent, VoteStartedEvent,
         },
         gamevent::GameEvent,
         message::{
@@ -63,6 +71,22 @@ pub struct DemoSummary {
     pub votes: Vec<VoteSummary>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub sourcemod_votes: Vec<SourceModVote>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub point_captures: Vec<PointCaptureStart>,
+}
+
+/// A `teamplay_point_startcapture` event: a capture attempt began.
+/// `cappers` holds the steamids of players on the point (best effort).
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct PointCaptureStart {
+    pub tick: DemoTick,
+    pub cp: u8,
+    pub cp_name: String,
+    pub team: u8,
+    pub cap_team: u8,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub cappers: Vec<String>, // steamids
+    pub cap_time: f32,
 }
 
 /// One ballot cast in a native TF2 vote (`vote_cast` game event).
@@ -264,6 +288,8 @@ pub struct MatchAnalyzer<'a> {
 
     vote_sessions: HashMap<u32, VoteSummary>, // voteidx -> in-progress native vote
     finished_votes: Vec<VoteSummary>, // closed native votes (voteidx reuse across maps)
+
+    point_captures: Vec<PointCaptureStart>,
 
     sm_votes: Vec<SourceModVote>,
     sm_current: Option<SourceModVote>,
@@ -487,6 +513,23 @@ fn parse_map_finished(text: &str) -> Option<(String, u32, u32)> {
     Some((map.to_string(), pct.parse().ok()?, votes.parse().ok()?))
 }
 
+/// Raw entity indices packed into `teamplay_point_startcapture.cappers`.
+/// Observed on the wire as 1-3 raw bytes (e.g. `[7, 15, 16]` = three
+/// cappers on entity slots 7/15/16), *not* a name list. Only byte values
+/// below 64 are accepted: anything else means the server sent some other
+/// (name-based?) format we don't decode, and resolving its bytes as entity
+/// slots would misattribute strangers' stats.
+fn parse_capper_entities(cappers: &MaybeUtf8String) -> Vec<u32> {
+    let bytes: &[u8] = match cappers {
+        MaybeUtf8String::Valid(s) => s.as_bytes(),
+        MaybeUtf8String::Invalid(b) => b,
+    };
+    if bytes.is_empty() || bytes.iter().any(|b| *b >= 64) {
+        return Vec::new();
+    }
+    bytes.iter().map(|b| *b as u32).collect()
+}
+
 impl<'a> MatchAnalyzer<'a> {
     pub fn new(schema: &'a Schema) -> Self {
         Self {
@@ -525,6 +568,7 @@ impl<'a> MatchAnalyzer<'a> {
             weapon_class_ids: Default::default(),
             vote_sessions: Default::default(),
             finished_votes: Default::default(),
+            point_captures: Default::default(),
             sm_votes: Default::default(),
             sm_current: Default::default(),
             sm_pending_scramble: Default::default(),
@@ -1385,6 +1429,306 @@ impl<'a> MatchAnalyzer<'a> {
             player.handle_capture_blocked();
         } else {
             error!("Could not lookup player with entity id {eid} in capture blocked event");
+        }
+    }
+
+    fn player_by_user_id_mut(&mut self, user_id: u16) -> Option<&mut PlayerSummary> {
+        let steamid = self
+            .user_id_to_steam_id
+            .get(&UserId::from(user_id))
+            .cloned()?;
+        self.player_summaries.get_mut(&steamid)
+    }
+
+    fn player_by_entity_mut(&mut self, entity: u32) -> Option<&mut PlayerSummary> {
+        self.get_player_summary_mut(&EntityId::from(entity))
+    }
+
+    /// Resolve an ambiguous byte-sized player ref. Field conventions split
+    /// by event family: kill-attribution and heal/building fields verified
+    /// against real demos carry entity indices here
+    /// (`BuildingHealed.healer`, `PlayerHealOnHit.ent_index`), while
+    /// `KilledCappingPlayer`/`CapperKilled` ids match entity slots too
+    /// (a userid-first lookup demonstrably misattributed capping kills to
+    /// SourceTV, whose low userid collides with live entity slots).
+    /// Entity-first therefore wins; userid is the fallback for refs that
+    /// are really userids (`CrossbowHeal`-style ids are handled userid-only
+    /// at their call sites). 0 (world/none) resolves to nobody.
+    fn player_by_ambiguous_id_mut(&mut self, id: u8) -> Option<&mut PlayerSummary> {
+        if id == 0 {
+            return None;
+        }
+        // Resolve to an owned steamid under immutable borrows first, then
+        // take a single mutable borrow.
+        let eid = EntityId::from(u32::from(id));
+        let steamid = self
+            .user_entities
+            .get(&eid)
+            .and_then(|uid| self.user_id_to_steam_id.get(uid))
+            .filter(|sid| self.player_summaries.contains_key(*sid))
+            .cloned()
+            .or_else(|| {
+                self.user_id_to_steam_id
+                    .get(&UserId::from(u32::from(id)))
+                    .filter(|sid| self.player_summaries.contains_key(*sid))
+                    .cloned()
+            })?;
+        self.player_summaries.get_mut(&steamid)
+    }
+
+    pub fn handle_player_healed(&mut self, e: &PlayerHealedEvent) {
+        trace!("Player healed {e:?}");
+        if e.healer == 0 {
+            return; // health kits etc. have no healer to credit
+        }
+        if let Some(healer) = self.player_by_user_id_mut(e.healer) {
+            healer.handle_heal_given(u32::from(e.amount));
+        } else {
+            error!("Could not lookup healer with user id {} in player_healed", e.healer);
+        }
+    }
+
+    pub fn handle_crossbow_heal(&mut self, e: &CrossbowHealEvent) {
+        trace!("Crossbow heal {e:?}");
+        if e.healer == 0 {
+            return;
+        }
+        if let Some(healer) = self.player_by_user_id_mut(u16::from(e.healer)) {
+            healer.handle_crossbow_heal(u32::from(e.amount));
+        } else {
+            error!("Could not lookup healer {} in crossbow_heal", e.healer);
+        }
+    }
+
+    pub fn handle_player_heal_on_hit(&mut self, e: &PlayerHealOnHitEvent) {
+        trace!("Player heal on hit {e:?}");
+        if let Some(player) = self.player_by_entity_mut(u32::from(e.ent_index)) {
+            player.handle_heal_on_hit(u32::from(e.amount));
+        } else {
+            error!(
+                "Could not lookup player with entity id {} in player_heal_on_hit",
+                e.ent_index
+            );
+        }
+    }
+
+    pub fn handle_player_extinguished(&mut self, e: &PlayerExtinguishedEvent) {
+        trace!("Player extinguished {e:?}");
+        if e.healer == 0 {
+            return;
+        }
+        if let Some(healer) = self.player_by_ambiguous_id_mut(e.healer) {
+            healer.handle_extinguish();
+        } else {
+            error!("Could not lookup healer {} in player_extinguished", e.healer);
+        }
+    }
+
+    pub fn handle_building_healed(&mut self, e: &BuildingHealedEvent) {
+        trace!("Building healed {e:?}");
+        // `healer` is an entity index here (verified: sentry owner resolves
+        // via entity slot, not userid).
+        if let Some(healer) = self.player_by_entity_mut(u32::from(e.healer)) {
+            healer.handle_building_heal(u32::from(e.amount));
+        } else {
+            error!(
+                "Could not lookup healer with entity id {} in building_healed",
+                e.healer
+            );
+        }
+    }
+
+    pub fn handle_medic_death(&mut self, e: &MedicDeathEvent) {
+        trace!("Medic death {e:?}");
+        if !e.charged {
+            return;
+        }
+        if let Some(medic) = self.player_by_user_id_mut(e.user_id) {
+            medic.handle_dropped_uber();
+        } else {
+            error!("Could not lookup medic with user id {} in medic_death", e.user_id);
+        }
+    }
+
+    pub fn handle_object_deflected(&mut self, e: &ObjectDeflectedEvent) {
+        trace!("Object deflected {e:?}");
+        if let Some(player) = self.player_by_user_id_mut(e.user_id) {
+            player.handle_reflect();
+        } else {
+            error!("Could not lookup player with user id {} in object_deflected", e.user_id);
+        }
+    }
+
+    pub fn handle_killed_capping_player(&mut self, e: &KilledCappingPlayerEvent) {
+        trace!("Killed capping player {e:?}");
+        // Killer/victim verified as entity indices (they match the u16
+        // CapperKilled ids for the same kills, and all values fall in live
+        // entity slots).
+        if let Some(killer) = self.player_by_entity_mut(u32::from(e.killer)) {
+            killer.handle_defense();
+        } else {
+            error!(
+                "Could not lookup killer {} in killed_capping_player",
+                e.killer
+            );
+        }
+    }
+
+    pub fn handle_capper_killed(&mut self, e: &CapperKilledEvent) {
+        trace!("Capper killed {e:?}");
+        // Entity index (see above); the co-fired KilledCappingPlayer event
+        // credits the same play again, so one stopped capper yields two
+        // `defenses` on koth.
+        if let Some(blocker) = self.player_by_entity_mut(u32::from(e.blocker)) {
+            blocker.handle_defense();
+        } else {
+            error!("Could not lookup blocker {} in capper_killed", e.blocker);
+        }
+    }
+
+    pub fn handle_projectile_direct_hit(&mut self, e: &ProjectileDirectHitEvent) {
+        trace!("Projectile direct hit {e:?}");
+        if e.attacker == 0 {
+            return;
+        }
+        if let Some(attacker) = self.player_by_ambiguous_id_mut(e.attacker) {
+            attacker.handle_direct_hit();
+        } else {
+            error!(
+                "Could not lookup attacker {} in projectile_direct_hit",
+                e.attacker
+            );
+        }
+    }
+
+    pub fn handle_player_teleported(&mut self, e: &PlayerTeleportedEvent) {
+        trace!("Player teleported {e:?}");
+        if let Some(builder) = self.player_by_user_id_mut(e.builder_id) {
+            builder.handle_teleport();
+        } else {
+            error!(
+                "Could not lookup builder {} in player_teleported",
+                e.builder_id
+            );
+        }
+    }
+
+    pub fn handle_point_start_capture(&mut self, e: &TeamPlayPointStartCaptureEvent) {
+        trace!("Point start capture {e:?}");
+        let mut cappers = Vec::new();
+        for entity in parse_capper_entities(&e.cappers) {
+            if let Some(eid) = self
+                .user_entities
+                .get(&EntityId::from(entity))
+                .and_then(|uid| self.user_id_to_steam_id.get(uid))
+                .cloned()
+            {
+                cappers.push(eid);
+            }
+        }
+        self.point_captures.push(PointCaptureStart {
+            tick: self.tick,
+            cp: e.cp,
+            cp_name: e.cp_name.to_string(),
+            team: e.team,
+            cap_team: e.cap_team,
+            cappers,
+            cap_time: e.cap_time,
+        });
+    }
+
+    pub fn handle_payload_pushed(&mut self, e: &PayloadPushedEvent) {
+        trace!("Payload pushed {e:?}");
+        if e.pusher == 0 {
+            return;
+        }
+        if let Some(pusher) = self.player_by_ambiguous_id_mut(e.pusher) {
+            pusher.handle_push(u32::from(e.distance));
+        } else {
+            error!("Could not lookup pusher {} in payload_pushed", e.pusher);
+        }
+    }
+
+    pub fn handle_environmental_death(&mut self, e: &EnvironmentalDeathEvent) {
+        trace!("Environmental death {e:?}");
+        if let Some(victim) = self.player_by_ambiguous_id_mut(e.victim) {
+            victim.handle_environmental_death();
+        } else {
+            error!("Could not lookup victim {} in environmental_death", e.victim);
+        }
+        if e.killer != 0 && e.killer != e.victim
+            && let Some(killer) = self.player_by_ambiguous_id_mut(e.killer)
+        {
+            killer.handle_environmental_kill();
+        }
+    }
+
+    pub fn handle_player_built_object(&mut self, e: &PlayerBuiltObjectEvent) {
+        trace!("Player built object {e:?}");
+        if let Some(player) = self.player_by_user_id_mut(e.user_id) {
+            player.handle_object_placed();
+        } else {
+            error!(
+                "Could not lookup player with user id {} in player_builtobject",
+                e.user_id
+            );
+        }
+    }
+
+    pub fn handle_player_upgraded_object(&mut self, e: &PlayerUpgradedObjectEvent) {
+        trace!("Player upgraded object {e:?}");
+        if let Some(player) = self.player_by_user_id_mut(e.user_id) {
+            player.handle_object_upgraded();
+        } else {
+            error!(
+                "Could not lookup player with user id {} in player_upgradedobject",
+                e.user_id
+            );
+        }
+    }
+
+    pub fn handle_player_carry_object(&mut self, e: &PlayerCarryObjectEvent) {
+        trace!("Player carry object {e:?}");
+        if let Some(player) = self.player_by_user_id_mut(e.user_id) {
+            player.handle_object_carried();
+        } else {
+            error!(
+                "Could not lookup player with user id {} in player_carryobject",
+                e.user_id
+            );
+        }
+    }
+
+    pub fn handle_player_drop_object(&mut self, e: &PlayerDropObjectEvent) {
+        trace!("Player drop object {e:?}");
+        if let Some(player) = self.player_by_user_id_mut(e.user_id) {
+            player.handle_object_dropped();
+        } else {
+            error!(
+                "Could not lookup player with user id {} in player_dropobject",
+                e.user_id
+            );
+        }
+    }
+
+    pub fn handle_object_removed(&mut self, e: &ObjectRemovedEvent) {
+        trace!("Object removed {e:?}");
+        if let Some(player) = self.player_by_user_id_mut(e.user_id) {
+            player.handle_object_removed();
+        } else {
+            error!("Could not lookup player with user id {} in object_removed", e.user_id);
+        }
+    }
+
+    pub fn handle_object_detonated(&mut self, e: &ObjectDetonatedEvent) {
+        trace!("Object detonated {e:?}");
+        if let Some(player) = self.player_by_user_id_mut(e.user_id) {
+            player.handle_object_detonated();
+        } else {
+            error!(
+                "Could not lookup player with user id {} in object_detonated",
+                e.user_id
+            );
         }
     }
 
@@ -2374,6 +2718,27 @@ impl MessageHandler for MatchAnalyzer<'_> {
                 GameEvent::VoteFailed(e) => self.handle_vote_failed(e),
                 GameEvent::VoteEnded(_) => self.handle_vote_ended(),
 
+                GameEvent::PlayerHealed(e) => self.handle_player_healed(e),
+                GameEvent::CrossbowHeal(e) => self.handle_crossbow_heal(e),
+                GameEvent::PlayerHealOnHit(e) => self.handle_player_heal_on_hit(e),
+                GameEvent::PlayerExtinguished(e) => self.handle_player_extinguished(e),
+                GameEvent::BuildingHealed(e) => self.handle_building_healed(e),
+                GameEvent::MedicDeath(e) => self.handle_medic_death(e),
+                GameEvent::ObjectDeflected(e) => self.handle_object_deflected(e),
+                GameEvent::KilledCappingPlayer(e) => self.handle_killed_capping_player(e),
+                GameEvent::CapperKilled(e) => self.handle_capper_killed(e),
+                GameEvent::ProjectileDirectHit(e) => self.handle_projectile_direct_hit(e),
+                GameEvent::PlayerTeleported(e) => self.handle_player_teleported(e),
+                GameEvent::TeamPlayPointStartCapture(e) => self.handle_point_start_capture(e),
+                GameEvent::PayloadPushed(e) => self.handle_payload_pushed(e),
+                GameEvent::EnvironmentalDeath(e) => self.handle_environmental_death(e),
+                GameEvent::PlayerBuiltObject(e) => self.handle_player_built_object(e),
+                GameEvent::PlayerUpgradedObject(e) => self.handle_player_upgraded_object(e),
+                GameEvent::PlayerCarryObject(e) => self.handle_player_carry_object(e),
+                GameEvent::PlayerDropObject(e) => self.handle_player_drop_object(e),
+                GameEvent::ObjectRemoved(e) => self.handle_object_removed(e),
+                GameEvent::ObjectDetonated(e) => self.handle_object_detonated(e),
+
                 GameEvent::TeamPlayWinPanel(e) => {
                     for entity_id_val in [e.player_1, e.player_2, e.player_3] {
                         let eid = EntityId::from(entity_id_val as u32);
@@ -2462,7 +2827,6 @@ impl MessageHandler for MatchAnalyzer<'_> {
                 // present in PoV demos and some STV demos (possibly
                 // based on server side plugins?)
                 GameEvent::PlayerDisconnect(d) => debug!("PlayerDisconnect {d:?}"),
-                GameEvent::PlayerHealed(heal) => debug!("PlayerHealed {heal:?}"),
                 GameEvent::PlayerInvulned(invuln) => debug!("PlayerDisconnect {invuln:?}"),
                 GameEvent::PlayerChargeDeployed(c) => debug!("PlayerChargeDeployed {c:?}"),
                 // GameEvent::TeamPlayRoundStalemate
@@ -2718,6 +3082,7 @@ impl MessageHandler for MatchAnalyzer<'_> {
             chat: self.chat,
             votes,
             sourcemod_votes: self.sm_votes,
+            point_captures: self.point_captures,
         }
     }
 }
@@ -3103,6 +3468,314 @@ mod tests {
         let back: DemoSummary = serde_json::from_str(&json).unwrap();
         assert_eq!(back.votes.len(), 1);
         assert_eq!(back.votes[0].ballots.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_capper_entities() {
+        use tf_demo_parser::demo::data::MaybeUtf8String;
+
+        // Packed entity indices, as observed on the wire.
+        let cappers: MaybeUtf8String = "\u{7}\u{f}\u{10}".into();
+        assert_eq!(parse_capper_entities(&cappers), vec![7, 15, 16]);
+
+        let single: MaybeUtf8String = "\u{2}".into();
+        assert_eq!(parse_capper_entities(&single), vec![2]);
+
+        let empty: MaybeUtf8String = "".into();
+        assert!(parse_capper_entities(&empty).is_empty());
+
+        // Name-like content (any byte >= 64) is rejected rather than
+        // misresolved as entity slots.
+        let names: MaybeUtf8String = "Alice, Bob".into();
+        assert!(parse_capper_entities(&names).is_empty());
+    }
+
+    #[test]
+    fn test_heal_event_handlers() {
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+        let parser_state = ParserState::new(0, |_| true, false);
+        // Medic userid 42 on entity 16, patient userid 37 on entity 15,
+        // pyro userid 45 on entity 7 (mirrors ashville observations).
+        for (idx, (name, steam, uid, eid)) in [
+            ("Scourage", "STEAM_0:1:100", 42u16, 15u32),
+            ("Crispy", "STEAM_0:1:101", 37, 14),
+            ("Funguz", "STEAM_0:1:102", 45, 6),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let entry = create_mock_user_info(name, steam, *uid, *eid);
+            analyzer.handle_string_entry("userinfo", idx, &entry, &parser_state);
+        }
+        analyzer.tick = DemoTick::from(1001);
+
+        analyzer.handle_player_healed(&PlayerHealedEvent {
+            patient: 37,
+            healer: 42,
+            amount: 127,
+        });
+        // Healer 0 (kits) credits nobody.
+        analyzer.handle_player_healed(&PlayerHealedEvent {
+            patient: 45,
+            healer: 0,
+            amount: 88,
+        });
+        analyzer.handle_crossbow_heal(&CrossbowHealEvent {
+            healer: 42,
+            target: 37,
+            amount: 127,
+        });
+        analyzer.handle_player_heal_on_hit(&PlayerHealOnHitEvent {
+            amount: 127,
+            ent_index: 15,
+            weapon_def_index: 207,
+        });
+        analyzer.handle_player_extinguished(&PlayerExtinguishedEvent {
+            victim: 37,
+            healer: 45,
+            item_definition_index: 0,
+        });
+
+        let medic = analyzer.player_summaries.get("STEAM_0:1:100").unwrap();
+        assert_eq!(medic.stats.heals, 1);
+        assert_eq!(medic.stats.healed, 127);
+        assert_eq!(medic.stats.crossbow_heals, 1);
+        assert_eq!(medic.stats.crossbow_healing, 127);
+
+        let patient = analyzer.player_summaries.get("STEAM_0:1:101").unwrap();
+        assert_eq!(patient.stats.heal_on_hit, 127);
+        assert_eq!(patient.stats.heals, 0);
+
+        let pyro = analyzer.player_summaries.get("STEAM_0:1:102").unwrap();
+        assert_eq!(pyro.stats.extinguishes, 1);
+    }
+
+    #[test]
+    fn test_defense_direct_teleport_push_handlers() {
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+        let parser_state = ParserState::new(0, |_| true, false);
+        for (idx, (name, steam, uid, eid)) in [
+            // Killer on entity slot 11 (seed is stored +1 by the mock
+            // userinfo encoding): capping-kill ids are entity indices.
+            ("Killer", "STEAM_0:1:200", 21u16, 10u32),
+            ("Engie", "STEAM_0:1:201", 30, 8),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let entry = create_mock_user_info(name, steam, *uid, *eid);
+            analyzer.handle_string_entry("userinfo", idx, &entry, &parser_state);
+        }
+
+        analyzer.handle_killed_capping_player(&KilledCappingPlayerEvent {
+            cp: 0,
+            killer: 11,
+            victim: 13,
+            assister: 16,
+        });
+        analyzer.handle_capper_killed(&CapperKilledEvent {
+            blocker: 11,
+            victim: 13,
+        });
+        analyzer.handle_projectile_direct_hit(&ProjectileDirectHitEvent {
+            attacker: 11,
+            victim: 13,
+            weapon_def_index: 0,
+        });
+        analyzer.handle_player_teleported(&PlayerTeleportedEvent {
+            user_id: 12,
+            builder_id: 30,
+            dist: 1500.0,
+        });
+        analyzer.handle_payload_pushed(&PayloadPushedEvent {
+            pusher: 11,
+            distance: 42,
+        });
+
+        let killer = analyzer.player_summaries.get("STEAM_0:1:200").unwrap();
+        assert_eq!(killer.stats.defenses, 2);
+        assert_eq!(killer.stats.direct_hits, 1);
+        assert_eq!(killer.stats.push_distance, 42);
+
+        let engie = analyzer.player_summaries.get("STEAM_0:1:201").unwrap();
+        assert_eq!(engie.stats.teleports, 1);
+    }
+
+    #[test]
+    fn test_environmental_death_handler() {
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+        let parser_state = ParserState::new(0, |_| true, false);
+        for (idx, (name, steam, uid, eid)) in [
+            ("Victim", "STEAM_0:1:300", 13u16, 9u32),
+            ("Killer", "STEAM_0:1:301", 11, 5),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let entry = create_mock_user_info(name, steam, *uid, *eid);
+            analyzer.handle_string_entry("userinfo", idx, &entry, &parser_state);
+        }
+
+        // World kill: only the victim tag.
+        analyzer.handle_environmental_death(&EnvironmentalDeathEvent {
+            killer: 0,
+            victim: 13,
+        });
+        // Player-attributed: both sides.
+        analyzer.handle_environmental_death(&EnvironmentalDeathEvent {
+            killer: 11,
+            victim: 13,
+        });
+
+        let victim = analyzer.player_summaries.get("STEAM_0:1:300").unwrap();
+        assert_eq!(victim.stats.environmental_deaths, 2);
+        assert_eq!(victim.stats.environmental_kills, 0);
+        let killer = analyzer.player_summaries.get("STEAM_0:1:301").unwrap();
+        assert_eq!(killer.stats.environmental_kills, 1);
+    }
+
+    #[test]
+    fn test_object_lifecycle_handlers() {
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+        let parser_state = ParserState::new(0, |_| true, false);
+        let entry = create_mock_user_info("Engie", "STEAM_0:1:400", 30, 8);
+        analyzer.handle_string_entry("userinfo", 0, &entry, &parser_state);
+
+        analyzer.handle_player_built_object(&PlayerBuiltObjectEvent {
+            user_id: 30,
+            object: 2,
+            index: 475,
+        });
+        analyzer.handle_player_upgraded_object(&PlayerUpgradedObjectEvent {
+            user_id: 30,
+            object: 2,
+            index: 475,
+            is_builder: true,
+        });
+        analyzer.handle_player_carry_object(&PlayerCarryObjectEvent {
+            user_id: 30,
+            object: 2,
+            index: 475,
+        });
+        analyzer.handle_player_drop_object(&PlayerDropObjectEvent {
+            user_id: 30,
+            object: 2,
+            index: 475,
+        });
+        analyzer.handle_object_removed(&ObjectRemovedEvent {
+            user_id: 30,
+            object_type: 2,
+            index: 475,
+        });
+        analyzer.handle_object_detonated(&ObjectDetonatedEvent {
+            user_id: 30,
+            object_type: 2,
+            index: 475,
+        });
+
+        let engie = analyzer.player_summaries.get("STEAM_0:1:400").unwrap();
+        assert_eq!(engie.stats.object_placed, 1);
+        assert_eq!(engie.stats.object_upgraded, 1);
+        assert_eq!(engie.stats.object_carried, 1);
+        assert_eq!(engie.stats.object_dropped, 1);
+        assert_eq!(engie.stats.object_removed, 1);
+        assert_eq!(engie.stats.object_detonated, 1);
+        // Entity-derived completion counter untouched by the event path.
+        assert_eq!(engie.stats.object_built, 0);
+    }
+
+    #[test]
+    fn test_medic_death_reflect_building_heal_handlers() {
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+        let parser_state = ParserState::new(0, |_| true, false);
+        for (idx, (name, steam, uid, eid)) in [
+            ("Medic", "STEAM_0:1:500", 42u16, 15u32),
+            ("Pyro", "STEAM_0:1:501", 45, 6),
+            ("Engie", "STEAM_0:1:502", 30, 7),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let entry = create_mock_user_info(name, steam, *uid, *eid);
+            analyzer.handle_string_entry("userinfo", idx, &entry, &parser_state);
+        }
+
+        analyzer.handle_medic_death(&MedicDeathEvent {
+            user_id: 42,
+            attacker: 35,
+            healing: 147,
+            charged: true,
+        });
+        analyzer.handle_medic_death(&MedicDeathEvent {
+            user_id: 42,
+            attacker: 35,
+            healing: 200,
+            charged: false,
+        });
+        analyzer.handle_object_deflected(&ObjectDeflectedEvent {
+            user_id: 45,
+            owner_id: 35,
+            weapon_id: 35,
+            object_ent_index: 327,
+        });
+        analyzer.handle_building_healed(&BuildingHealedEvent {
+            building: 475,
+            healer: 8,
+            amount: 81,
+        });
+
+        let medic = analyzer.player_summaries.get("STEAM_0:1:500").unwrap();
+        assert_eq!(medic.stats.dropped_ubers, 1);
+        let pyro = analyzer.player_summaries.get("STEAM_0:1:501").unwrap();
+        assert_eq!(pyro.stats.reflects, 1);
+        let engie = analyzer.player_summaries.get("STEAM_0:1:502").unwrap();
+        assert_eq!(engie.stats.building_healing, 81);
+    }
+
+    #[test]
+    fn test_point_start_capture_handler() {
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+        let parser_state = ParserState::new(0, |_| true, false);
+        for (idx, (name, steam, uid, eid)) in [
+            ("Red1", "STEAM_0:1:600", 20u16, 7u32),
+            ("Red2", "STEAM_0:1:601", 21, 15),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let entry = create_mock_user_info(name, steam, *uid, *eid);
+            analyzer.handle_string_entry("userinfo", idx, &entry, &parser_state);
+        }
+
+        analyzer.tick = DemoTick::from(2384);
+        analyzer.handle_point_start_capture(&TeamPlayPointStartCaptureEvent {
+            cp: 0,
+            cp_name: "#koth_viaduct_cap".into(),
+            team: 0,
+            cap_team: 2,
+            // Packed entity indices 8 and 15 (seeds are stored +1 by the
+            // mock userinfo encoding, mirroring real demos).
+            cappers: "\u{8}\u{10}".into(),
+            cap_time: 34.45,
+        });
+
+        assert_eq!(analyzer.point_captures.len(), 1);
+        let cap = &analyzer.point_captures[0];
+        assert_eq!(u32::from(cap.tick), 2384);
+        assert_eq!(cap.cp_name, "#koth_viaduct_cap");
+        assert_eq!(cap.cap_team, 2);
+        assert_eq!(cap.cappers, vec!["STEAM_0:1:600".to_string(), "STEAM_0:1:601".to_string()]);
+        assert!((cap.cap_time - 34.45).abs() < 0.01);
+
+        let parser_state = ParserState::new(0, |_| true, false);
+        let summary = analyzer.into_output(&parser_state);
+        assert_eq!(summary.point_captures.len(), 1);
     }
 
     #[test]

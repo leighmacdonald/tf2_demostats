@@ -45,6 +45,7 @@ message DemoSummary {
   repeated ChatMessage chat = 2;
   repeated VoteSummary votes = 3;
   repeated SourceModVote sourcemod_votes = 4;
+  repeated PointCaptureStart point_captures = 5;
 }
 
 message ChatMessage {
@@ -139,6 +140,27 @@ message Stats {
   uint32 hits = 31;
   uint32 object_built = 32;
   uint32 object_destroyed = 33;
+  uint32 heals = 34;
+  uint32 healed = 35;
+  uint32 crossbow_heals = 36;
+  uint32 crossbow_healing = 37;
+  uint32 heal_on_hit = 38;
+  uint32 extinguishes = 39;
+  uint32 building_healing = 40;
+  uint32 dropped_ubers = 41;
+  uint32 reflects = 42;
+  uint32 defenses = 43;
+  uint32 direct_hits = 44;
+  uint32 teleports = 45;
+  uint32 push_distance = 46;
+  uint32 environmental_deaths = 47;
+  uint32 environmental_kills = 48;
+  uint32 object_placed = 49;
+  uint32 object_upgraded = 50;
+  uint32 object_carried = 51;
+  uint32 object_dropped = 52;
+  uint32 object_removed = 53;
+  uint32 object_detonated = 54;
 }
 
 enum Team {
@@ -229,4 +251,16 @@ message SourceModVote {
   // "Scrambling the teams due to vote." or the winning map name.
   optional string result = 9;
   optional bool passed = 10;
+}
+
+message PointCaptureStart {
+  uint32 tick = 1;
+  uint32 cp = 2;
+  string cp_name = 3;
+  uint32 team = 4;
+  uint32 cap_team = 5;
+  // Steamids of players on the point, best effort.
+  repeated string cappers = 6;
+  // Expected seconds to cap from this event.
+  float cap_time = 7;
 }

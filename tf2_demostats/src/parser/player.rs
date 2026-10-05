@@ -1,11 +1,11 @@
 use crate::{
-    Vec3,
     parser::{
         game::{DamageType, Death, RoundState},
         is_false, is_zero,
         stats::Stats,
     },
     schema::{Attribute, Item},
+    Vec3,
 };
 use enumset::EnumSet;
 use serde::{Deserialize, Serialize};
@@ -240,6 +240,101 @@ impl PlayerSummary {
     pub fn handle_capture_blocked(&mut self) {
         self.stats.handle_capture_blocked();
         self.class_stats().handle_capture_blocked();
+    }
+
+    pub fn handle_heal_given(&mut self, amount: u32) {
+        self.stats.handle_heal_given(amount);
+        self.class_stats().handle_heal_given(amount);
+    }
+
+    pub fn handle_crossbow_heal(&mut self, amount: u32) {
+        self.stats.handle_crossbow_heal(amount);
+        self.class_stats().handle_crossbow_heal(amount);
+    }
+
+    pub fn handle_heal_on_hit(&mut self, amount: u32) {
+        self.stats.handle_heal_on_hit(amount);
+        self.class_stats().handle_heal_on_hit(amount);
+    }
+
+    pub fn handle_extinguish(&mut self) {
+        self.stats.handle_extinguish();
+        self.class_stats().handle_extinguish();
+    }
+
+    pub fn handle_building_heal(&mut self, amount: u32) {
+        self.stats.handle_building_heal(amount);
+        self.class_stats().handle_building_heal(amount);
+    }
+
+    pub fn handle_dropped_uber(&mut self) {
+        self.stats.handle_dropped_uber();
+        self.class_stats().handle_dropped_uber();
+    }
+
+    pub fn handle_reflect(&mut self) {
+        self.stats.handle_reflect();
+        self.class_stats().handle_reflect();
+    }
+
+    pub fn handle_defense(&mut self) {
+        self.stats.handle_defense();
+        self.class_stats().handle_defense();
+    }
+
+    pub fn handle_direct_hit(&mut self) {
+        self.stats.handle_direct_hit();
+        self.class_stats().handle_direct_hit();
+    }
+
+    pub fn handle_teleport(&mut self) {
+        self.stats.handle_teleport();
+        self.class_stats().handle_teleport();
+    }
+
+    pub fn handle_push(&mut self, distance: u32) {
+        self.stats.handle_push(distance);
+        self.class_stats().handle_push(distance);
+    }
+
+    pub fn handle_environmental_death(&mut self) {
+        self.stats.handle_environmental_death();
+        self.class_stats().handle_environmental_death();
+    }
+
+    pub fn handle_environmental_kill(&mut self) {
+        self.stats.handle_environmental_kill();
+        self.class_stats().handle_environmental_kill();
+    }
+
+    pub fn handle_object_placed(&mut self) {
+        self.stats.handle_object_placed();
+        self.class_stats().handle_object_placed();
+    }
+
+    pub fn handle_object_upgraded(&mut self) {
+        self.stats.handle_object_upgraded();
+        self.class_stats().handle_object_upgraded();
+    }
+
+    pub fn handle_object_carried(&mut self) {
+        self.stats.handle_object_carried();
+        self.class_stats().handle_object_carried();
+    }
+
+    pub fn handle_object_dropped(&mut self) {
+        self.stats.handle_object_dropped();
+        self.class_stats().handle_object_dropped();
+    }
+
+    pub fn handle_object_removed(&mut self) {
+        self.stats.handle_object_removed();
+        self.class_stats().handle_object_removed();
+    }
+
+    pub fn handle_object_detonated(&mut self) {
+        self.stats.handle_object_detonated();
+        self.class_stats().handle_object_detonated();
     }
 
     // Uber/Kritz/Quickfix
