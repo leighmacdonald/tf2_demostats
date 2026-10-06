@@ -1,5 +1,4 @@
 use crate::Result;
-use awc::Client;
 use merge::Merge;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs::File, io::Write, path::Path};
@@ -298,15 +297,25 @@ struct ApiResponse<T> {
 ///
 /// Returns an error on network/JSON failures or if the file cannot be written.
 pub async fn download_schema(api_key: String, path: &Path) -> Result<()> {
-    let client = Client::default();
+    // NOTE: this previously used `awc` (actix web client), which requires an
+    // actix runtime (`LocalSet`) and panicked with
+    // "`spawn_local` called from outside of a `task::LocalSet`" under the
+    // tokio multi-thread runtime. `reqwest` works on plain tokio.
+    let client = reqwest::Client::new();
     let schema_url =
         format!("https://api.steampowered.com/IEconItems_440/GetSchemaURL/v0001/?key={api_key}");
-    let mut response = client.get(schema_url).send().await?;
-    let body: ApiResponse<SchemaUrl> = response.json().await?;
-    let mut response = client.get(body.result.items_game_url).send().await?;
+    let body: ApiResponse<SchemaUrl> = client.get(schema_url).send().await?.json().await?;
+    let bytes = client
+        .get(body.result.items_game_url)
+        .send()
+        .await?
+        .bytes()
+        .await?;
+    if bytes.len() > 10_000_000 {
+        return Err(format!("schema body too large: {} bytes", bytes.len()).into());
+    }
     let mut out_path = File::create(path)?;
-    let b = response.body().limit(10_000_000).await?;
-    out_path.write_all(&b)?;
+    out_path.write_all(&bytes)?;
 
     Ok(())
 }
