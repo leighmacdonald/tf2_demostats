@@ -59,6 +59,204 @@ tf2-demostats parse --schema schema.json match.dem [...]
 ```
 
 Writes `<demo>.json` next to each demo (player stats, kills, objectives, chat, …).
+Example (one round/player shown; the player totals list every stat key —
+in real output zero-valued stats, `None` optionals, empty lists, and `false`
+flags are omitted; `classes` has one entry per class played and `weapons` one
+per weapon/log name, each with the same stat keys as the totals):
+
+```json
+{
+  "filename": "match.dem",
+  "demo_type": "HL2DEMO",
+  "version": 3,
+  "protocol": 24,
+  "server": "Team Fortress 3",
+  "nick": "SourceTV Demo",
+  "map": "cp_sunshine",
+  "game": "tf",
+  "duration": 424.59,
+  "ticks": 28306,
+  "frames": 28300,
+  "signon": 1048701,
+  "rounds": [
+    {
+      "winner": "red",
+      "is_stalemate": false,
+      "is_sudden_death": false,
+      "time": 105.64,
+      "mvps": ["[U:1:152334258]"],
+      "players": [
+        {
+          "name": "MaTiN",
+          "steamid": "[U:1:106601634]",
+          "tick_start": null,
+          "tick_end": null,
+          "points": 2,
+          "connection_count": 1,
+          "bonus_points": 0,
+          "kills": 2,
+          "assists": 1,
+          "deaths": 1,
+          "postround_kills": 0,
+          "postround_assists": 0,
+          "postround_deaths": 0,
+          "preround_healing": 0,
+          "healing": 0,
+          "postround_healing": 0,
+          "drops": 0,
+          "near_full_charge_death": 0,
+          "charges_uber": 0,
+          "charges_kritz": 0,
+          "charges_quickfix": 0,
+          "damage": 469,
+          "damage_taken": 309,
+          "dominations": 0,
+          "dominated": 0,
+          "revenges": 1,
+          "revenged": 0,
+          "airshots": 0,
+          "headshot_kills": 0,
+          "backstab_kills": 0,
+          "headshots": 0,
+          "backstabs": 0,
+          "captures": 1,
+          "captures_blocked": 0,
+          "was_headshot": 1,
+          "was_backstabbed": 0,
+          "shots": 46,
+          "hits": 9,
+          "object_built": 0,
+          "object_destroyed": 0,
+          "heals": 0,
+          "healed": 0,
+          "crossbow_heals": 0,
+          "crossbow_healing": 0,
+          "heal_on_hit": 0,
+          "extinguishes": 0,
+          "building_healing": 0,
+          "dropped_ubers": 0,
+          "reflects": 0,
+          "defenses": 0,
+          "direct_hits": 0,
+          "teleports": 0,
+          "push_distance": 0,
+          "environmental_deaths": 0,
+          "environmental_kills": 0,
+          "object_placed": 0,
+          "object_upgraded": 0,
+          "object_carried": 0,
+          "object_dropped": 0,
+          "object_removed": 0,
+          "object_detonated": 0,
+          "ammo_packs": 1,
+          "health_packs": 1,
+          "health_pack_healing": 50,
+          "classes": {
+            "soldier": { "...": "same stat keys as the player totals above" }
+          },
+          "weapons": {
+            "tf_projectile_rocket": { "...": "same stat keys as the player totals above" }
+          },
+          "scoreboard_kills": 2,
+          "scoreboard_assists": 0,
+          "suicides": 0,
+          "scoreboard_deaths": 1,
+          "heal_targets": { "[U:1:1301844036]": 6.04 },
+          "scoreboard_damage": 362,
+          "is_fake_player": false,
+          "is_hl_tv": false,
+          "is_replay": false
+        }
+      ],
+      "winners": ["[U:1:106601634]"],
+      "losers": ["[U:1:33620010]"]
+    }
+  ],
+  "chat": [
+    {
+      "tick": 6258,
+      "user": "[U:1:33620010]",
+      "message": "ez",
+      "is_dead": true,
+      "is_team": false,
+      "is_spec": false,
+      "is_name_change": false
+    }
+  ],
+  "votes": [
+    {
+      "voteidx": 0,
+      "tick_start": 6258,
+      "tick_end": 6800,
+      "issue": "kick",
+      "param1": "[U:1:33620010]",
+      "team": 0,
+      "initiator_entity": 7,
+      "initiator": "[U:1:106601634]",
+      "initiator_name": "MaTiN",
+      "options": ["Yes", "No"],
+      "ballots": [
+        {
+          "tick": 6300,
+          "voter_entity": 8,
+          "voter": "[U:1:1088863185]",
+          "voter_name": "jetstream",
+          "option": 0,
+          "option_name": "Yes"
+        }
+      ],
+      "counts": [4, 1],
+      "potential_votes": 12,
+      "passed": true,
+      "result_details": "kick successful",
+      "result_param1": "[U:1:33620010]"
+    }
+  ],
+  "sourcemod_votes": [
+    {
+      "kind": "map",
+      "tick_start": 2741,
+      "tick_end": 3200,
+      "initiators": [
+        { "name": "moriya", "steamid": "[U:1:1687868738]", "tick": 2741, "current": 1, "required": 11 }
+      ],
+      "nominations": [
+        { "name": "SchwanzusLongus", "steamid": "[U:1:152334258]", "map": "cp_process_final", "tick": 2800 }
+      ],
+      "total_votes": 12,
+      "potential_votes": 21,
+      "options": [{ "name": "cp_process_final", "votes": 9 }],
+      "result": "cp_process_final",
+      "passed": true
+    }
+  ],
+  "point_captures": [
+    {
+      "tick": 5000,
+      "cp": 2,
+      "cp_name": "Granary",
+      "team": 2,
+      "cap_team": 2,
+      "cappers": ["[U:1:106601634]"],
+      "cap_time": 8.0
+    }
+  ],
+  "kills": [
+    {
+      "tick": 4230,
+      "killer": "[U:1:106601634]",
+      "victim": "[U:1:1687868738]",
+      "weapon": "tf_projectile_rocket",
+      "killer_pos": { "x": -5496.0, "y": 5393.625, "z": 348.0 },
+      "victim_pos": { "x": -5441.75, "y": 5269.125, "z": 363.25 },
+      "killer_angles": { "pitch": 26.47, "yaw": 268.85 },
+      "victim_angles": { "pitch": 8.82, "yaw": 137.24 }
+    }
+  ]
+}
+```
+
+World/environment kills omit `killer`; feigned spy deaths are not recorded.
 
 ### Extract voice audio
 
