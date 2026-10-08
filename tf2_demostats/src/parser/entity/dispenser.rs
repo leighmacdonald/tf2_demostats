@@ -3,7 +3,7 @@ use crate::{
     parser::{
         entity::{Entity, EntityClass, SENTRY_BOX},
         props::{BUILDER, ORIGIN, UPGRADE_LEVEL},
-        summarizer::MatchAnalyzerView,
+        summarizer::{BuildingType, MatchAnalyzerView, Position},
     },
 };
 use parry3d::shape::SharedShape;
@@ -64,6 +64,18 @@ impl Entity for Dispenser {
 
         if let Some(owner) = patch.owner {
             game.handle_object_built(&owner);
+            let origin = patch.origin.unwrap_or_default();
+            game.handle_building_built(
+                &owner,
+                BuildingType::Dispenser,
+                patch.level.unwrap_or_default(),
+                false,
+                Position {
+                    x: origin.x,
+                    y: origin.y,
+                    z: origin.z,
+                },
+            );
         }
 
         Self {

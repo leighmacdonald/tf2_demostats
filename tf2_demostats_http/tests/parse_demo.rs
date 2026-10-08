@@ -91,6 +91,21 @@ async fn convert_matches_json_api() {
         );
         assert_eq!(msg.message, msg_json["message"].as_str().unwrap());
     }
+
+    // The generic event feed survives the proto conversion intact.
+    let events_json = json["events"].as_array().unwrap();
+    assert_eq!(summary.events.len(), events_json.len());
+    assert!(!summary.events.is_empty(), "test.dem should produce events");
+    let mut prev_tick = 0u32;
+    for (event, event_json) in summary.events.iter().zip(events_json) {
+        assert!(event.tick >= prev_tick, "events are chronological");
+        prev_tick = event.tick;
+        assert_eq!(
+            event.tick,
+            u32::try_from(event_json["tick"].as_u64().unwrap()).unwrap()
+        );
+        assert!(event.kind.is_some(), "every event has a kind");
+    }
 }
 
 /// The handler parses a real upload and echoes the request filename.

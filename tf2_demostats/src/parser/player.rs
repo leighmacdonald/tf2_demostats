@@ -115,6 +115,11 @@ pub struct PlayerSummary {
     #[serde(skip)]
     pub scoreboard_healing: u32,
 
+    /// Consecutive kills + assists since the player's last (non-feigned)
+    /// death. Survives round resets; feeds `KillstreakEnded` events.
+    #[serde(skip)]
+    pub killstreak: u32,
+
     // TODO: Move this to always be read from the entity
     #[serde(skip)]
     pub origin: Vec3,
@@ -190,6 +195,8 @@ impl PlayerSummary {
     pub fn handle_assist(&mut self, round_state: RoundState, flags: EnumSet<Death>) {
         self.stats.handle_assist(round_state, flags);
         self.class_stats().handle_assist(round_state, flags);
+        // Assists keep a streak alive just like kills do.
+        self.killstreak += 1;
     }
 
     pub fn handle_kill(
@@ -206,6 +213,7 @@ impl PlayerSummary {
             .handle_kill(round_state, flags, damage_type, airshot);
         self.weapon_stats(weapon)
             .handle_kill(round_state, flags, damage_type, airshot);
+        self.killstreak += 1;
     }
 
     pub fn handle_death(&mut self, round_state: RoundState, flags: EnumSet<Death>) {
