@@ -3,7 +3,7 @@ use crate::{
     parser::{
         entity::{Entity, EntityClass, SENTRY_BOX},
         props::{BUILDER, OBJECT_MAX_HEALTH, ORIGIN, UPGRADE_LEVEL},
-        summarizer::MatchAnalyzerView,
+        summarizer::{BuildingType, MatchAnalyzerView, Position},
     },
 };
 use parry3d::shape::SharedShape;
@@ -68,6 +68,18 @@ impl Entity for Sentry {
 
         if let Some(owner) = patch.owner {
             game.handle_object_built(&owner);
+            let origin = patch.origin.unwrap_or_default();
+            game.handle_building_built(
+                &owner,
+                BuildingType::Sentry,
+                patch.level.unwrap_or_default(),
+                patch.is_mini.unwrap_or_default(),
+                Position {
+                    x: origin.x,
+                    y: origin.y,
+                    z: origin.z,
+                },
+            );
         }
 
         Self {

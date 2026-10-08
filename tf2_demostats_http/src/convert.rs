@@ -264,6 +264,17 @@ pub fn sm_option(value: &summarizer::SmVoteOption) -> pb::SmVoteOption {
 }
 
 #[must_use]
+pub fn building_type(value: &summarizer::BuildingType) -> pb::BuildingType {
+    match value {
+        summarizer::BuildingType::Sentry => pb::BuildingType::BUILDING_SENTRY,
+        summarizer::BuildingType::Dispenser => pb::BuildingType::BUILDING_DISPENSER,
+        summarizer::BuildingType::Teleporter => pb::BuildingType::BUILDING_TELEPORTER,
+        summarizer::BuildingType::Sapper => pb::BuildingType::BUILDING_SAPPER,
+        summarizer::BuildingType::Unknown => pb::BuildingType::BUILDING_UNKNOWN,
+    }
+}
+
+#[must_use]
 pub fn position(value: &summarizer::Position) -> pb::Position {
     pb::Position {
         x: value.x,
@@ -292,6 +303,239 @@ pub fn kill(value: &summarizer::KillEvent) -> pb::KillEvent {
         victim_pos: value.victim_pos.as_ref().map(position).into(),
         killer_angles: value.killer_angles.as_ref().map(eye_angles).into(),
         victim_angles: value.victim_angles.as_ref().map(eye_angles).into(),
+        is_first_blood: value.is_first_blood,
+        is_domination: value.is_domination,
+        is_revenge: value.is_revenge,
+        ..Default::default()
+    }
+}
+
+type GameEventKind = pb::__buffa::oneof::game_event::Kind;
+
+#[must_use]
+pub fn tick_marker(value: &summarizer::TickMarker) -> pb::TickMarker {
+    pb::TickMarker {
+        tick: u32::from(value.tick),
+        ..Default::default()
+    }
+}
+
+#[must_use]
+pub fn building_lifecycle(value: &summarizer::BuildingLifecycle) -> pb::BuildingLifecycle {
+    pb::BuildingLifecycle {
+        tick: u32::from(value.tick),
+        player: value.player.clone(),
+        building: buffa::EnumValue::from(building_type(&value.building)),
+        index: u32::from(value.index),
+        ..Default::default()
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+pub fn game_event(value: &summarizer::MatchEvent) -> pb::GameEvent {
+    use summarizer::MatchEvent as E;
+    let (tick, kind) = match value {
+        E::Kill(e) => (e.tick, GameEventKind::Kill(Box::new(kill(e)))),
+        E::CaptureStarted(e) => (
+            e.tick,
+            GameEventKind::CaptureStarted(Box::new(point_capture(e))),
+        ),
+        E::Capture(e) => (
+            e.tick,
+            GameEventKind::Capture(Box::new(pb::PointCapture {
+                tick: u32::from(e.tick),
+                cp: u32::from(e.cp),
+                cp_name: e.cp_name.clone(),
+                team: u32::from(e.team),
+                cap_team: u32::from(e.cap_team),
+                cappers: e.cappers.clone(),
+                ..Default::default()
+            })),
+        ),
+        E::CaptureBlocked(e) => (
+            e.tick,
+            GameEventKind::CaptureBlocked(Box::new(pb::CaptureBlocked {
+                tick: u32::from(e.tick),
+                cp: u32::from(e.cp),
+                cp_name: e.cp_name.clone(),
+                blocker: e.blocker.clone(),
+                victim: e.victim.clone(),
+                ..Default::default()
+            })),
+        ),
+        E::CaptureBroken(e) => (
+            e.tick,
+            GameEventKind::CaptureBroken(Box::new(pb::CaptureBroken {
+                tick: u32::from(e.tick),
+                cp: u32::from(e.cp),
+                cp_name: e.cp_name.clone(),
+                time_remaining: e.time_remaining,
+                ..Default::default()
+            })),
+        ),
+        E::BuildingBuilt(e) => (
+            e.tick,
+            GameEventKind::BuildingBuilt(Box::new(pb::BuildingBuilt {
+                tick: u32::from(e.tick),
+                owner: e.owner.clone(),
+                building: buffa::EnumValue::from(building_type(&e.building)),
+                level: e.level,
+                is_mini: e.is_mini,
+                pos: buffa::MessageField::some(position(&e.pos)),
+                ..Default::default()
+            })),
+        ),
+        E::BuildingDestroyed(e) => (
+            e.tick,
+            GameEventKind::BuildingDestroyed(Box::new(pb::BuildingDestroyed {
+                tick: u32::from(e.tick),
+                owner: e.owner.clone(),
+                attacker: e.attacker.clone(),
+                assister: e.assister.clone(),
+                weapon: e.weapon.clone(),
+                building: buffa::EnumValue::from(building_type(&e.building)),
+                pos: e.pos.as_ref().map(position).into(),
+                ..Default::default()
+            })),
+        ),
+        E::BuildingUpgraded(e) => (
+            e.tick,
+            GameEventKind::BuildingUpgraded(Box::new(building_lifecycle(e))),
+        ),
+        E::BuildingCarried(e) => (
+            e.tick,
+            GameEventKind::BuildingCarried(Box::new(building_lifecycle(e))),
+        ),
+        E::BuildingDropped(e) => (
+            e.tick,
+            GameEventKind::BuildingDropped(Box::new(building_lifecycle(e))),
+        ),
+        E::BuildingRemoved(e) => (
+            e.tick,
+            GameEventKind::BuildingRemoved(Box::new(building_lifecycle(e))),
+        ),
+        E::BuildingDetonated(e) => (
+            e.tick,
+            GameEventKind::BuildingDetonated(Box::new(building_lifecycle(e))),
+        ),
+        E::SapperPlaced(e) => (
+            e.tick,
+            GameEventKind::SapperPlaced(Box::new(pb::SapperPlaced {
+                tick: u32::from(e.tick),
+                spy: e.spy.clone(),
+                owner: e.owner.clone(),
+                building: buffa::EnumValue::from(building_type(&e.building)),
+                sapper_index: u32::from(e.sapper_index),
+                ..Default::default()
+            })),
+        ),
+        E::RoundStarted(e) => (
+            e.tick,
+            GameEventKind::RoundStarted(Box::new(pb::RoundStarted {
+                tick: u32::from(e.tick),
+                full_reset: e.full_reset,
+                ..Default::default()
+            })),
+        ),
+        E::RoundWon(e) => (
+            e.tick,
+            GameEventKind::RoundWon(Box::new(pb::RoundWon {
+                tick: u32::from(e.tick),
+                winner: e.winner.map(|winner| buffa::EnumValue::from(team(&winner))),
+                is_stalemate: e.is_stalemate,
+                win_reason: u32::from(e.win_reason),
+                round_time: e.round_time,
+                was_sudden_death: e.was_sudden_death,
+                ..Default::default()
+            })),
+        ),
+        E::Stalemate(e) => (
+            e.tick,
+            GameEventKind::Stalemate(Box::new(pb::Stalemate {
+                tick: u32::from(e.tick),
+                reason: u32::from(e.reason),
+                ..Default::default()
+            })),
+        ),
+        E::GameOver(e) => (
+            e.tick,
+            GameEventKind::GameOver(Box::new(pb::GameOver {
+                tick: u32::from(e.tick),
+                reason: e.reason.clone(),
+                ..Default::default()
+            })),
+        ),
+        E::SuddenDeathBegin(e) => (
+            e.tick,
+            GameEventKind::SuddenDeathBegin(Box::new(tick_marker(e))),
+        ),
+        E::SuddenDeathEnd(e) => (
+            e.tick,
+            GameEventKind::SuddenDeathEnd(Box::new(tick_marker(e))),
+        ),
+        E::OvertimeBegin(e) => (
+            e.tick,
+            GameEventKind::OvertimeBegin(Box::new(tick_marker(e))),
+        ),
+        E::OvertimeEnd(e) => (e.tick, GameEventKind::OvertimeEnd(Box::new(tick_marker(e)))),
+        E::SetupFinished(e) => (
+            e.tick,
+            GameEventKind::SetupFinished(Box::new(tick_marker(e))),
+        ),
+        E::UberDropped(e) => (
+            e.tick,
+            GameEventKind::UberDropped(Box::new(pb::UberDropped {
+                tick: u32::from(e.tick),
+                medic: e.medic.clone(),
+                attacker: e.attacker.clone(),
+                healing: u32::from(e.healing),
+                ..Default::default()
+            })),
+        ),
+        E::UberDeployed(e) => (
+            e.tick,
+            GameEventKind::UberDeployed(Box::new(pb::UberDeployed {
+                tick: u32::from(e.tick),
+                medic: e.medic.clone(),
+                target: e.target.clone(),
+                ..Default::default()
+            })),
+        ),
+        E::FlagEvent(e) => (
+            e.tick,
+            GameEventKind::FlagEvent(Box::new(pb::FlagEvent {
+                tick: u32::from(e.tick),
+                player: e.player.clone(),
+                carrier: e.carrier.clone(),
+                event_type: u32::from(e.event_type),
+                team: u32::from(e.team),
+                home: e.home,
+                ..Default::default()
+            })),
+        ),
+        E::FlagCaptured(e) => (
+            e.tick,
+            GameEventKind::FlagCaptured(Box::new(pb::FlagCaptured {
+                tick: u32::from(e.tick),
+                capping_team: u32::from(e.capping_team),
+                score: u32::from(e.score),
+                ..Default::default()
+            })),
+        ),
+        E::KillstreakEnded(e) => (
+            e.tick,
+            GameEventKind::KillstreakEnded(Box::new(pb::KillstreakEnded {
+                tick: u32::from(e.tick),
+                player: e.player.clone(),
+                streak: e.streak,
+                killer: e.killer.clone(),
+                ..Default::default()
+            })),
+        ),
+    };
+    pb::GameEvent {
+        tick: u32::from(tick),
+        kind: Some(kind),
         ..Default::default()
     }
 }
@@ -335,13 +579,7 @@ pub fn demo_output(value: &DemoOutput) -> pb::DemoOutput {
             chat: value.summary.chat.iter().map(chat).collect(),
             votes: value.summary.votes.iter().map(vote).collect(),
             sourcemod_votes: value.summary.sourcemod_votes.iter().map(sm_vote).collect(),
-            point_captures: value
-                .summary
-                .point_captures
-                .iter()
-                .map(point_capture)
-                .collect(),
-            kills: value.summary.kills.iter().map(kill).collect(),
+            events: value.summary.events.iter().map(game_event).collect(),
             ..Default::default()
         }),
         ..Default::default()

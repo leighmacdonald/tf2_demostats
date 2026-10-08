@@ -2411,7 +2411,7 @@ dependencies = [
 
 [[package]]
 name = "tf2_demostats"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "alga",
  "enumset",
@@ -2435,7 +2435,7 @@ dependencies = [
 
 [[package]]
 name = "tf2_demostats_cli"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "clap",
  "clap_complete",
@@ -2450,7 +2450,7 @@ dependencies = [
 
 [[package]]
 name = "tf2_demostats_http"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "axum",
  "buffa",

@@ -58,7 +58,7 @@ tf2-demostats update                      # writes schema.json
 tf2-demostats parse --schema schema.json match.dem [...]
 ```
 
-Writes `<demo>.json` next to each demo (player stats, kills, objectives, chat, …).
+Writes `<demo>.json` next to each demo (player stats, event feed, chat, …).
 Example (one round/player shown; the player totals list every stat key —
 in real output zero-valued stats, `None` optionals, empty lists, and `false`
 flags are omitted; `classes` has one entry per class played and `weapons` one
@@ -230,8 +230,9 @@ per weapon/log name, each with the same stat keys as the totals):
       "passed": true
     }
   ],
-  "point_captures": [
+  "events": [
     {
+      "type": "capture_started",
       "tick": 5000,
       "cp": 2,
       "cp_name": "Granary",
@@ -239,10 +240,9 @@ per weapon/log name, each with the same stat keys as the totals):
       "cap_team": 2,
       "cappers": ["[U:1:106601634]"],
       "cap_time": 8.0
-    }
-  ],
-  "kills": [
+    },
     {
+      "type": "kill",
       "tick": 4230,
       "killer": "[U:1:106601634]",
       "victim": "[U:1:1687868738]",
@@ -251,12 +251,64 @@ per weapon/log name, each with the same stat keys as the totals):
       "victim_pos": { "x": -5441.75, "y": 5269.125, "z": 363.25 },
       "killer_angles": { "pitch": 26.47, "yaw": 268.85 },
       "victim_angles": { "pitch": 8.82, "yaw": 137.24 }
+    },
+    {
+      "type": "building_built",
+      "tick": 4879,
+      "owner": "[U:1:34407569]",
+      "building": "sentry",
+      "level": 1,
+      "pos": { "x": -6830.34, "y": 8874.15, "z": -15.96 }
+    },
+    {
+      "type": "building_destroyed",
+      "tick": 9257,
+      "owner": "[U:1:34407569]",
+      "attacker": "[U:1:152334258]",
+      "weapon": "quake_rl",
+      "building": "sentry",
+      "pos": { "x": -6830.34, "y": 8874.15, "z": -15.96 }
+    },
+    {
+      "type": "uber_dropped",
+      "tick": 12345,
+      "medic": "[U:1:106601634]",
+      "attacker": "[U:1:1687868738]",
+      "healing": 147
+    },
+    {
+      "type": "round_won",
+      "tick": 9784,
+      "winner": "red",
+      "win_reason": 1,
+      "round_time": 105.6
+    },
+    {
+      "type": "killstreak_ended",
+      "tick": 9584,
+      "player": "[U:1:172588788]",
+      "streak": 6,
+      "killer": "[U:1:159075135]"
     }
   ]
 }
 ```
 
 World/environment kills omit `killer`; feigned spy deaths are not recorded.
+First-blood, domination, and revenge kills set `is_first_blood`,
+`is_domination`, `is_revenge`. The feed is chronological and also covers
+capture/block/broken moments, building built (with position) / destroyed
+(with destroyer and last known position) / upgraded / carried / dropped /
+removed / detonated, sapper placements, uber drops and pops, flag events,
+and round/game lifecycle markers (`round_started`, `round_won`,
+`stalemate`, `game_over`, sudden-death/overtime/setup markers). Player
+fields are steamids; anything unresolvable is omitted.
+
+Kills and assists both feed a per-player killstreak counter (survives
+round resets, like the in-game counter). Dying with a streak of 5 or more
+emits `killstreak_ended` naming the killer — suicides name the player
+themselves, world deaths omit `killer`, and feigned spy deaths neither
+end streaks nor emit.
 
 ### Extract voice audio
 

@@ -35,15 +35,17 @@ use tf_demo_parser::{
     demo::{
         data::{DemoTick, MaybeUtf8String, UserInfo},
         gameevent_gen::{
-            BuildingHealedEvent, CapperKilledEvent, CrossbowHealEvent, EnvironmentalDeathEvent,
-            GameEventType, ItemPickupEvent, KilledCappingPlayerEvent, MedicDeathEvent,
-            ObjectDeflectedEvent, ObjectDetonatedEvent, ObjectRemovedEvent, PayloadPushedEvent,
-            PlayerBuiltObjectEvent, PlayerCarryObjectEvent, PlayerDeathEvent,
-            PlayerDropObjectEvent, PlayerExtinguishedEvent, PlayerHealOnHitEvent,
-            PlayerHealedEvent, PlayerHurtEvent, PlayerTeleportedEvent, PlayerUpgradedObjectEvent,
-            ProjectileDirectHitEvent, TeamPlayCaptureBlockedEvent, TeamPlayPointCapturedEvent,
-            TeamPlayPointStartCaptureEvent, VoteCastEvent, VoteChangedEvent, VoteFailedEvent,
-            VoteOptionsEvent, VotePassedEvent, VoteStartedEvent,
+            BuildingHealedEvent, CapperKilledEvent, CrossbowHealEvent, CtfFlagCapturedEvent,
+            EnvironmentalDeathEvent, GameEventType, ItemPickupEvent, KilledCappingPlayerEvent,
+            MedicDeathEvent, ObjectDeflectedEvent, ObjectDestroyedEvent, ObjectDetonatedEvent,
+            ObjectRemovedEvent, PayloadPushedEvent, PlayerBuiltObjectEvent, PlayerCarryObjectEvent,
+            PlayerChargeDeployedEvent, PlayerDeathEvent, PlayerDropObjectEvent,
+            PlayerExtinguishedEvent, PlayerHealOnHitEvent, PlayerHealedEvent, PlayerHurtEvent,
+            PlayerSappedObjectEvent, PlayerTeleportedEvent, PlayerUpgradedObjectEvent,
+            ProjectileDirectHitEvent, TeamPlayCaptureBlockedEvent, TeamPlayCaptureBrokenEvent,
+            TeamPlayFlagEventEvent, TeamPlayPointCapturedEvent, TeamPlayPointStartCaptureEvent,
+            VoteCastEvent, VoteChangedEvent, VoteFailedEvent, VoteOptionsEvent, VotePassedEvent,
+            VoteStartedEvent,
         },
         gamevent::{GameEvent, GameEventValue, RawGameEvent},
         message::{
@@ -73,10 +75,7 @@ pub struct DemoSummary {
     pub votes: Vec<VoteSummary>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub sourcemod_votes: Vec<SourceModVote>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub point_captures: Vec<PointCaptureStart>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub kills: Vec<KillEvent>,
+    pub events: Vec<MatchEvent>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone, Copy)]
@@ -114,6 +113,12 @@ pub struct KillEvent {
     pub killer_angles: Option<EyeAngles>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub victim_angles: Option<EyeAngles>,
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub is_first_blood: bool,
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub is_domination: bool,
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub is_revenge: bool,
 }
 
 /// A `teamplay_point_startcapture` event: a capture attempt began.
@@ -128,6 +133,312 @@ pub struct PointCaptureStart {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub cappers: Vec<String>, // steamids
     pub cap_time: f32,
+}
+
+/// Building kind for building lifecycle events. Follows the TF2
+/// `ObjectType` numbering: dispenser=0, teleporter=1, sentry=2, sapper=3.
+#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BuildingType {
+    Sentry,
+    Dispenser,
+    Teleporter,
+    Sapper,
+    #[default]
+    Unknown,
+}
+
+impl BuildingType {
+    #[must_use]
+    pub fn from_object_type(t: u16) -> Self {
+        match t {
+            0 => Self::Dispenser,
+            1 => Self::Teleporter,
+            2 => Self::Sentry,
+            3 => Self::Sapper,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// A `teamplay_point_captured` event: the point changed hands.
+/// `cappers` holds the steamids of players on the point (best effort).
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct PointCapture {
+    pub tick: DemoTick,
+    pub cp: u8,
+    pub cp_name: String,
+    pub team: u8,
+    pub cap_team: u8,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub cappers: Vec<String>, // steamids
+}
+
+/// A `teamplay_capture_blocked` event: someone stopped a capture.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct CaptureBlocked {
+    pub tick: DemoTick,
+    pub cp: u8,
+    pub cp_name: String,
+    /// Steamid of the blocker, if resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocker: Option<String>,
+    /// Steamid of the capped player, if resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub victim: Option<String>,
+}
+
+/// A `teamplay_capture_broken` event: a capture attempt decayed.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct CaptureBroken {
+    pub tick: DemoTick,
+    pub cp: u8,
+    pub cp_name: String,
+    pub time_remaining: f32,
+}
+
+/// A building entity spawned: construction finished (or the building
+/// entered PVS). Positions come from the entity, so this is the
+/// authoritative "built" signal.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct BuildingBuilt {
+    pub tick: DemoTick,
+    /// Steamid of the owning engineer, if resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    pub building: BuildingType,
+    pub level: u32,
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub is_mini: bool,
+    pub pos: Position,
+}
+
+/// An `object_destroyed` event: a building was destroyed.
+/// `pos` is the building's last known position, absent when its entity
+/// was already gone (entity teardown can precede the game event).
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct BuildingDestroyed {
+    pub tick: DemoTick,
+    /// Steamid of the owning engineer, if resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// Steamid of the destroyer; `None` for world/carried losses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attacker: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assister: Option<String>,
+    pub weapon: String,
+    pub building: BuildingType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pos: Option<Position>,
+}
+
+/// A building lifecycle broadcast event (upgraded, carried, dropped,
+/// removed, detonated). Carried/dropped buildings have no world position.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct BuildingLifecycle {
+    pub tick: DemoTick,
+    /// Steamid of the engineer, if resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub player: Option<String>,
+    pub building: BuildingType,
+    pub index: u16,
+}
+
+/// A `player_sapped_object` event: a spy placed a sapper.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct SapperPlaced {
+    pub tick: DemoTick,
+    /// Steamid of the spy, if resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spy: Option<String>,
+    /// Steamid of the building owner, if resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    pub building: BuildingType,
+    pub sapper_index: u16,
+}
+
+/// A round/game tick marker with no payload (setup finished, sudden
+/// death begin/end, overtime begin/end).
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct TickMarker {
+    pub tick: DemoTick,
+}
+
+/// A `teamplay_round_start` event.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct RoundStarted {
+    pub tick: DemoTick,
+    pub full_reset: bool,
+}
+
+/// A `teamplay_round_win` event. Stalemates arrive here with
+/// `winner: None` / `is_stalemate: true`, mirroring `RoundSummary`.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct RoundWon {
+    pub tick: DemoTick,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub winner: Option<Team>,
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub is_stalemate: bool,
+    pub win_reason: u8,
+    pub round_time: f32,
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub was_sudden_death: bool,
+}
+
+/// A `teamplay_round_stalemate` event.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct Stalemate {
+    pub tick: DemoTick,
+    pub reason: u8,
+}
+
+/// A `teamplay_game_over` (match end) event.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct GameOver {
+    pub tick: DemoTick,
+    pub reason: String,
+}
+
+/// A `medic_death` with a full charge: the medic dropped uber.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct UberDropped {
+    pub tick: DemoTick,
+    /// Steamid of the medic, if resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub medic: Option<String>,
+    /// Steamid of the killer, if resolved (`None` for world deaths).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attacker: Option<String>,
+    pub healing: u16,
+}
+
+/// A `player_chargedeployed` event: a medic popped uber/kritz/etc.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct UberDeployed {
+    pub tick: DemoTick,
+    /// Steamid of the medic, if resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub medic: Option<String>,
+    /// Steamid of the charge target, if resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+}
+
+/// A `teamplay_flag_event` (CTF flag pickup/drop/capture/defend).
+/// `event_type` follows the TF2 `TF_FLAGEVENT_*` numbering.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct FlagEvent {
+    pub tick: DemoTick,
+    /// Steamid of the involved player, if resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub player: Option<String>,
+    /// Steamid of the flag carrier, if resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub carrier: Option<String>,
+    pub event_type: u16,
+    pub team: u8,
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub home: bool,
+}
+
+/// A `ctf_flag_captured` event: a team scored an intel capture.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct FlagCaptured {
+    pub tick: DemoTick,
+    pub capping_team: u16,
+    pub score: u16,
+}
+
+/// Minimum streak length that ends with a `KillstreakEnded` event.
+/// The streak counts kills and assists since the player's last death.
+pub const KILLSTREAK_THRESHOLD: u32 = 5;
+
+/// A player died with a killstreak of [`KILLSTREAK_THRESHOLD`] or more.
+/// Suicides record the player as their own killer; world deaths have no
+/// killer. Feigned deaths (spy) neither end streaks nor emit this.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct KillstreakEnded {
+    pub tick: DemoTick,
+    /// Steamid of the player whose streak ended.
+    pub player: String,
+    /// Kills + assists since their last death.
+    pub streak: u32,
+    /// Steamid of the killer, if resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub killer: Option<String>,
+}
+
+/// One noteworthy match moment. Kills keep their full detail (positions,
+/// angles); everything else carries the sidebar-relevant facts.
+/// Serialized as `{"type": "<snake_case variant>", ...fields}`.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MatchEvent {
+    Kill(KillEvent),
+    CaptureStarted(PointCaptureStart),
+    Capture(PointCapture),
+    CaptureBlocked(CaptureBlocked),
+    CaptureBroken(CaptureBroken),
+    BuildingBuilt(BuildingBuilt),
+    BuildingDestroyed(BuildingDestroyed),
+    BuildingUpgraded(BuildingLifecycle),
+    BuildingCarried(BuildingLifecycle),
+    BuildingDropped(BuildingLifecycle),
+    BuildingRemoved(BuildingLifecycle),
+    BuildingDetonated(BuildingLifecycle),
+    SapperPlaced(SapperPlaced),
+    RoundStarted(RoundStarted),
+    RoundWon(RoundWon),
+    Stalemate(Stalemate),
+    GameOver(GameOver),
+    SuddenDeathBegin(TickMarker),
+    SuddenDeathEnd(TickMarker),
+    OvertimeBegin(TickMarker),
+    OvertimeEnd(TickMarker),
+    SetupFinished(TickMarker),
+    UberDropped(UberDropped),
+    UberDeployed(UberDeployed),
+    FlagEvent(FlagEvent),
+    FlagCaptured(FlagCaptured),
+    KillstreakEnded(KillstreakEnded),
+}
+
+impl MatchEvent {
+    #[must_use]
+    pub fn tick(&self) -> DemoTick {
+        match self {
+            Self::Kill(e) => e.tick,
+            Self::CaptureStarted(e) => e.tick,
+            Self::Capture(e) => e.tick,
+            Self::CaptureBlocked(e) => e.tick,
+            Self::CaptureBroken(e) => e.tick,
+            Self::BuildingBuilt(e) => e.tick,
+            Self::BuildingDestroyed(e) => e.tick,
+            Self::BuildingUpgraded(e)
+            | Self::BuildingCarried(e)
+            | Self::BuildingDropped(e)
+            | Self::BuildingRemoved(e)
+            | Self::BuildingDetonated(e) => e.tick,
+            Self::SapperPlaced(e) => e.tick,
+            Self::RoundStarted(e) => e.tick,
+            Self::RoundWon(e) => e.tick,
+            Self::Stalemate(e) => e.tick,
+            Self::GameOver(e) => e.tick,
+            Self::SuddenDeathBegin(e)
+            | Self::SuddenDeathEnd(e)
+            | Self::OvertimeBegin(e)
+            | Self::OvertimeEnd(e)
+            | Self::SetupFinished(e) => e.tick,
+            Self::UberDropped(e) => e.tick,
+            Self::UberDeployed(e) => e.tick,
+            Self::FlagEvent(e) => e.tick,
+            Self::FlagCaptured(e) => e.tick,
+            Self::KillstreakEnded(e) => e.tick,
+        }
+    }
 }
 
 /// One ballot cast in a native TF2 vote (`vote_cast` game event).
@@ -333,9 +644,7 @@ pub struct MatchAnalyzer<'a> {
     vote_sessions: HashMap<u32, VoteSummary>, // voteidx -> in-progress native vote
     finished_votes: Vec<VoteSummary>,         // closed native votes (voteidx reuse across maps)
 
-    point_captures: Vec<PointCaptureStart>,
-
-    kills: Vec<KillEvent>,
+    events: Vec<MatchEvent>,
 
     sm_votes: Vec<SourceModVote>,
     sm_current: Option<SourceModVote>,
@@ -356,6 +665,8 @@ pub struct MatchAnalyzerView<'a> {
     pub cosmetic_owners: &'a mut HashMap<u32, UserId>,
     pub explosions: &'a mut Vec<Explosion>,
     pub tick_events: &'a mut Vec<Event>,
+    pub events: &'a mut Vec<MatchEvent>,
+    pub waiting_for_players: bool,
     pub schema: &'a Schema,
     pub world: &'a QueryPipeline,
     pub collider_set: &'a ColliderSet,
@@ -434,6 +745,37 @@ impl MatchAnalyzerView<'_> {
         };
 
         p.handle_object_built(weapon::weapon_name(item, class));
+    }
+
+    /// Emit a `BuildingBuilt` event for a freshly spawned building entity.
+    /// Suppressed while waiting for players (stream join spawns every
+    /// pre-existing building at once, which would otherwise read as a
+    /// mass construction event).
+    pub fn handle_building_built(
+        &mut self,
+        owner: &u32,
+        building: BuildingType,
+        level: u32,
+        is_mini: bool,
+        pos: Position,
+    ) {
+        if self.waiting_for_players {
+            return;
+        }
+        let owner = self
+            .entity_handles
+            .get(owner)
+            .and_then(|eid| self.user_entities.get(eid))
+            .and_then(|uid| self.user_id_to_steam_id.get(uid))
+            .cloned();
+        self.events.push(MatchEvent::BuildingBuilt(BuildingBuilt {
+            tick: self.tick,
+            owner,
+            building,
+            level,
+            is_mini,
+            pos,
+        }));
     }
 }
 
@@ -649,8 +991,7 @@ impl<'a> MatchAnalyzer<'a> {
             weapon_class_ids: HashSet::new(),
             vote_sessions: HashMap::new(),
             finished_votes: Vec::new(),
-            point_captures: Vec::new(),
-            kills: Vec::new(),
+            events: Vec::new(),
             sm_votes: Vec::new(),
             sm_current: None,
             sm_pending_scramble: Vec::new(),
@@ -966,6 +1307,8 @@ impl<'a> MatchAnalyzer<'a> {
                     cosmetic_owners: &mut self.cosmetic_owners,
                     explosions: &mut self.explosions,
                     tick_events: &mut self.tick_events,
+                    events: &mut self.events,
+                    waiting_for_players: self.waiting_for_players,
                     schema: self.schema,
                     world: &self.world,
                     collider_set: &self.collider_set,
@@ -1015,6 +1358,8 @@ impl<'a> MatchAnalyzer<'a> {
                     cosmetic_owners: &mut self.cosmetic_owners,
                     explosions: &mut self.explosions,
                     tick_events: &mut self.tick_events,
+                    events: &mut self.events,
+                    waiting_for_players: self.waiting_for_players,
                     schema: self.schema,
                     world: &self.world,
                     collider_set: &self.collider_set,
@@ -1058,6 +1403,8 @@ impl<'a> MatchAnalyzer<'a> {
                     cosmetic_owners: &mut self.cosmetic_owners,
                     explosions: &mut self.explosions,
                     tick_events: &mut self.tick_events,
+                    events: &mut self.events,
+                    waiting_for_players: self.waiting_for_players,
                     schema: self.schema,
                     world: &self.world,
                     collider_set: &self.collider_set,
@@ -1327,6 +1674,7 @@ impl<'a> MatchAnalyzer<'a> {
         death: &PlayerDeathEvent,
         tick: DemoTick,
         victim_steamid: &str,
+        flags: EnumSet<Death>,
     ) {
         let killer = if death.attacker == 0 {
             None
@@ -1339,7 +1687,7 @@ impl<'a> MatchAnalyzer<'a> {
             .as_deref()
             .map_or_else(|| (None, None), |k| self.player_pos_angles(k));
         let (victim_pos, victim_angles) = self.player_pos_angles(victim_steamid);
-        self.kills.push(KillEvent {
+        self.events.push(MatchEvent::Kill(KillEvent {
             tick,
             killer,
             victim: victim_steamid.to_string(),
@@ -1348,7 +1696,59 @@ impl<'a> MatchAnalyzer<'a> {
             victim_pos,
             killer_angles,
             victim_angles,
-        });
+            is_first_blood: flags.contains(Death::FirstBlood),
+            is_domination: flags.contains(Death::Domination),
+            is_revenge: flags.contains(Death::Revenge),
+        }));
+    }
+
+    /// Steamid for a userid, if known.
+    fn steamid_by_user_id(&self, user_id: u16) -> Option<String> {
+        self.user_id_to_steam_id
+            .get(&UserId::from(user_id))
+            .cloned()
+    }
+
+    /// Record the end of a notable streak. Streaks below
+    /// [`KILLSTREAK_THRESHOLD`] end silently.
+    fn push_killstreak_ended(
+        &mut self,
+        tick: DemoTick,
+        player: &str,
+        streak: u32,
+        killer: Option<String>,
+    ) {
+        if streak >= KILLSTREAK_THRESHOLD {
+            self.events
+                .push(MatchEvent::KillstreakEnded(KillstreakEnded {
+                    tick,
+                    player: player.to_string(),
+                    streak,
+                    killer,
+                }));
+        }
+    }
+    /// Steamid for a player entity index, if known.
+    fn steamid_by_entity(&self, entity: u32) -> Option<String> {
+        self.user_entities
+            .get(&EntityId::from(entity))
+            .and_then(|uid| self.user_id_to_steam_id.get(uid))
+            .cloned()
+    }
+
+    /// Best-effort steamid for a byte-ish player ref that may be an entity
+    /// index or a userid (see `player_by_ambiguous_id_mut`). Entity-first,
+    /// userid as fallback; 0 (world/none) resolves to nobody.
+    fn steamid_by_ambiguous_id(&self, id: u16) -> Option<String> {
+        if id == 0 {
+            return None;
+        }
+        if usize::from(id) < ENTITY_COUNT
+            && let Some(steamid) = self.steamid_by_entity(u32::from(id))
+        {
+            return Some(steamid);
+        }
+        self.steamid_by_user_id(id)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1392,14 +1792,17 @@ impl<'a> MatchAnalyzer<'a> {
         if victim_user_id == attacker_user_id {
             let steamid = self.user_id_to_steam_id.get(&attacker_user_id).cloned();
             if let Some(steamid) = steamid {
-                if let Some(suicider) = self.player_summaries.get_mut(&steamid) {
+                let streak = if let Some(suicider) = self.player_summaries.get_mut(&steamid) {
                     if self.round_state != RoundState::TeamWin {
                         suicider.suicides += 1;
                     }
+                    std::mem::take(&mut suicider.killstreak)
                 } else {
                     error!("Unknown suicider steamid for user_id: {}", attacker_user_id);
-                }
-                self.record_kill_event(death, tick, &steamid);
+                    0
+                };
+                self.record_kill_event(death, tick, &steamid, flags);
+                self.push_killstreak_ended(tick, &steamid, streak, Some(steamid.clone()));
             } else {
                 error!(
                     "Unknown suicider steamid mapping for user_id: {}",
@@ -1449,11 +1852,23 @@ impl<'a> MatchAnalyzer<'a> {
         }
 
         victim.handle_death(self.round_state, flags);
+        // Feigned deaths don't end the streak: the player never died.
+        let victim_streak = if feigned {
+            victim.killstreak
+        } else {
+            std::mem::take(&mut victim.killstreak)
+        };
 
         let airshot = victim.in_air() && (self.tick - victim.started_flying > 16);
 
         if !feigned {
-            self.record_kill_event(death, tick, &victim_steamid);
+            self.record_kill_event(death, tick, &victim_steamid, flags);
+            let killer = if death.attacker == 0 {
+                None
+            } else {
+                self.user_id_to_steam_id.get(&attacker_user_id).cloned()
+            };
+            self.push_killstreak_ended(tick, &victim_steamid, victim_streak, killer);
         }
 
         let attacker_is_world = death.attacker == 0;
@@ -1540,6 +1955,11 @@ impl<'a> MatchAnalyzer<'a> {
         }
 
         let assister_user_id = UserId::from(u32::from(death.assister));
+        if assister_user_id == attacker_user_id {
+            // Corrupt event (already reported above): crediting it would
+            // count one kill twice towards the streak.
+            return;
+        }
         let assister_steamid = self.user_id_to_steam_id.get(&assister_user_id).cloned();
         if let Some(assister_steamid) = assister_steamid {
             if let Some(assister) = self.player_summaries.get_mut(&assister_steamid) {
@@ -1579,14 +1999,26 @@ impl<'a> MatchAnalyzer<'a> {
     pub fn handle_point_captured(&mut self, cap: &TeamPlayPointCapturedEvent) {
         trace!("Point captured {:?}", cap);
 
-        for entity_id_val in cap.cappers.as_bytes() {
-            let eid = EntityId::from(u32::from(*entity_id_val));
+        let mut cappers = Vec::new();
+        for entity in parse_capper_entities(&cap.cappers) {
+            let eid = EntityId::from(entity);
             if let Some(player) = self.get_player_summary_mut(eid) {
                 player.handle_capture();
             } else {
                 error!("Could not lookup player with entity id {eid} in capture event");
             }
+            if let Some(steamid) = self.steamid_by_entity(entity) {
+                cappers.push(steamid);
+            }
         }
+        self.events.push(MatchEvent::Capture(PointCapture {
+            tick: self.tick,
+            cp: cap.cp,
+            cp_name: cap.cp_name.to_string(),
+            team: cap.team,
+            cap_team: cap.team,
+            cappers,
+        }));
     }
 
     pub fn handle_capture_blocked(&mut self, cap: &TeamPlayCaptureBlockedEvent) {
@@ -1598,6 +2030,23 @@ impl<'a> MatchAnalyzer<'a> {
         } else {
             error!("Could not lookup player with entity id {eid} in capture blocked event");
         }
+        self.events.push(MatchEvent::CaptureBlocked(CaptureBlocked {
+            tick: self.tick,
+            cp: cap.cp,
+            cp_name: cap.cp_name.to_string(),
+            blocker: self.steamid_by_entity(u32::from(cap.blocker)),
+            victim: self.steamid_by_entity(u32::from(cap.victim)),
+        }));
+    }
+
+    pub fn handle_capture_broken(&mut self, cap: &TeamPlayCaptureBrokenEvent) {
+        trace!("Capture broken {:?}", cap);
+        self.events.push(MatchEvent::CaptureBroken(CaptureBroken {
+            tick: self.tick,
+            cp: cap.cp,
+            cp_name: cap.cp_name.to_string(),
+            time_remaining: cap.time_remaining,
+        }));
     }
 
     fn player_by_user_id_mut(&mut self, user_id: u16) -> Option<&mut PlayerSummary> {
@@ -1725,6 +2174,53 @@ impl<'a> MatchAnalyzer<'a> {
                 e.user_id
             );
         }
+        self.events.push(MatchEvent::UberDropped(UberDropped {
+            tick: self.tick,
+            medic: self.steamid_by_user_id(e.user_id),
+            attacker: self.steamid_by_user_id(e.attacker),
+            healing: e.healing,
+        }));
+    }
+
+    pub fn handle_charge_deployed(&mut self, e: &PlayerChargeDeployedEvent) {
+        trace!("Player charge deployed {e:?}");
+        self.events.push(MatchEvent::UberDeployed(UberDeployed {
+            tick: self.tick,
+            medic: self.steamid_by_user_id(e.user_id),
+            target: self.steamid_by_user_id(e.target_id),
+        }));
+    }
+
+    pub fn handle_sapped_object(&mut self, e: &PlayerSappedObjectEvent) {
+        trace!("Player sapped object {e:?}");
+        self.events.push(MatchEvent::SapperPlaced(SapperPlaced {
+            tick: self.tick,
+            spy: self.steamid_by_user_id(e.user_id),
+            owner: self.steamid_by_user_id(e.owner_id),
+            building: BuildingType::from_object_type(u16::from(e.object)),
+            sapper_index: e.sapper_id,
+        }));
+    }
+
+    pub fn handle_flag_event(&mut self, e: &TeamPlayFlagEventEvent) {
+        trace!("Flag event {e:?}");
+        self.events.push(MatchEvent::FlagEvent(FlagEvent {
+            tick: self.tick,
+            player: self.steamid_by_ambiguous_id(e.player),
+            carrier: self.steamid_by_ambiguous_id(e.carrier),
+            event_type: e.event_type,
+            team: e.team,
+            home: e.home != 0,
+        }));
+    }
+
+    pub fn handle_flag_captured(&mut self, e: &CtfFlagCapturedEvent) {
+        trace!("Flag captured {e:?}");
+        self.events.push(MatchEvent::FlagCaptured(FlagCaptured {
+            tick: self.tick,
+            capping_team: e.capping_team,
+            score: e.capping_team_score,
+        }));
     }
 
     pub fn handle_object_deflected(&mut self, e: &ObjectDeflectedEvent) {
@@ -1806,15 +2302,16 @@ impl<'a> MatchAnalyzer<'a> {
                 cappers.push(eid);
             }
         }
-        self.point_captures.push(PointCaptureStart {
-            tick: self.tick,
-            cp: e.cp,
-            cp_name: e.cp_name.to_string(),
-            team: e.team,
-            cap_team: e.cap_team,
-            cappers,
-            cap_time: e.cap_time,
-        });
+        self.events
+            .push(MatchEvent::CaptureStarted(PointCaptureStart {
+                tick: self.tick,
+                cp: e.cp,
+                cp_name: e.cp_name.to_string(),
+                team: e.team,
+                cap_team: e.cap_team,
+                cappers,
+                cap_time: e.cap_time,
+            }));
     }
 
     pub fn handle_payload_pushed(&mut self, e: &PayloadPushedEvent) {
@@ -1869,6 +2366,13 @@ impl<'a> MatchAnalyzer<'a> {
                 e.user_id
             );
         }
+        self.events
+            .push(MatchEvent::BuildingUpgraded(BuildingLifecycle {
+                tick: self.tick,
+                player: self.steamid_by_user_id(e.user_id),
+                building: BuildingType::from_object_type(e.object),
+                index: e.index,
+            }));
     }
 
     pub fn handle_player_carry_object(&mut self, e: &PlayerCarryObjectEvent) {
@@ -1881,6 +2385,13 @@ impl<'a> MatchAnalyzer<'a> {
                 e.user_id
             );
         }
+        self.events
+            .push(MatchEvent::BuildingCarried(BuildingLifecycle {
+                tick: self.tick,
+                player: self.steamid_by_user_id(e.user_id),
+                building: BuildingType::from_object_type(e.object),
+                index: e.index,
+            }));
     }
 
     pub fn handle_player_drop_object(&mut self, e: &PlayerDropObjectEvent) {
@@ -1893,6 +2404,13 @@ impl<'a> MatchAnalyzer<'a> {
                 e.user_id
             );
         }
+        self.events
+            .push(MatchEvent::BuildingDropped(BuildingLifecycle {
+                tick: self.tick,
+                player: self.steamid_by_user_id(e.user_id),
+                building: BuildingType::from_object_type(e.object),
+                index: e.index,
+            }));
     }
 
     pub fn handle_object_removed(&mut self, e: &ObjectRemovedEvent) {
@@ -1905,6 +2423,95 @@ impl<'a> MatchAnalyzer<'a> {
                 e.user_id
             );
         }
+        self.events
+            .push(MatchEvent::BuildingRemoved(BuildingLifecycle {
+                tick: self.tick,
+                player: self.steamid_by_user_id(e.user_id),
+                building: BuildingType::from_object_type(e.object_type),
+                index: e.index,
+            }));
+    }
+
+    pub fn handle_object_destroyed(&mut self, e: &ObjectDestroyedEvent) {
+        trace!("Object destroyed {e:?}");
+        if self.round_state != RoundState::Running {
+            return;
+        }
+
+        let attacker_uid = UserId::from(e.attacker);
+
+        let mut weapon: &'static str = ustr::ustr(e.weapon.as_ref()).as_str();
+        if matches!(e.weapon, MaybeUtf8String::Invalid(_)) || weapon == "building_carried_destroyed"
+        {
+            let steamid = self.user_id_to_steam_id.get(&attacker_uid).cloned();
+            if let Some(steamid) = steamid {
+                if let Some(player_summary) = self.player_summaries.get(&steamid) {
+                    if let Some(player_ent) = self.get_player(&player_summary.entity_id) {
+                        if let Some(item) = self
+                            .get_weapon(&player_ent.last_active_weapon_handle)
+                            .and_then(|w| self.schema.items.get(&w.schema_id))
+                        {
+                            weapon = weapon::weapon_name(item, player_ent.class);
+                        } else {
+                            // Could not get weapon item, proceed with original weapon name if any
+                        }
+                    } else {
+                        error!(
+                            "Could not find player entity {} for object destroyed event",
+                            player_summary.entity_id
+                        );
+                    }
+                } else {
+                    error!(
+                        "Could not find player summary for steamid of attacker_uid {attacker_uid} for object destroyed event"
+                    );
+                }
+            } else {
+                error!(
+                    "Could not find steamid for attacker_uid {attacker_uid} for object destroyed event"
+                );
+            }
+        }
+
+        let steamid = self.user_id_to_steam_id.get(&attacker_uid).cloned();
+        if let Some(steamid) = steamid {
+            if let Some(attacker) = self.player_summaries.get_mut(&steamid) {
+                attacker.handle_object_destroyed(weapon);
+            } else {
+                error!(
+                    "Could not find attacker summary for steamid {steamid} that destroyed building {e:?}"
+                );
+            }
+        } else {
+            error!(
+                "Could not find steamid for attacker_uid {attacker_uid} that destroyed building {e:?}"
+            );
+        }
+
+        let pos = self
+            .entities
+            .get(usize::from(e.index))
+            .and_then(|b| b.as_ref())
+            .and_then(|ent| ent.origin())
+            .map(|o| Position {
+                x: o.x,
+                y: o.y,
+                z: o.z,
+            });
+        self.events
+            .push(MatchEvent::BuildingDestroyed(BuildingDestroyed {
+                tick: self.tick,
+                owner: self.steamid_by_user_id(e.user_id),
+                attacker: (e.attacker != 0)
+                    .then(|| self.steamid_by_user_id(e.attacker))
+                    .flatten(),
+                assister: (e.assister != 0 && e.assister != 0xffff)
+                    .then(|| self.steamid_by_user_id(e.assister))
+                    .flatten(),
+                weapon: weapon.to_string(),
+                building: BuildingType::from_object_type(e.object_type),
+                pos,
+            }));
     }
 
     pub fn handle_object_detonated(&mut self, e: &ObjectDetonatedEvent) {
@@ -1917,6 +2524,13 @@ impl<'a> MatchAnalyzer<'a> {
                 e.user_id
             );
         }
+        self.events
+            .push(MatchEvent::BuildingDetonated(BuildingLifecycle {
+                tick: self.tick,
+                player: self.steamid_by_user_id(e.user_id),
+                building: BuildingType::from_object_type(e.object_type),
+                index: e.index,
+            }));
     }
 
     pub fn handle_item_pickup(&mut self, e: &ItemPickupEvent) {
@@ -3006,6 +3620,7 @@ impl MessageHandler for MatchAnalyzer<'_> {
 
                 GameEvent::TeamPlayPointCaptured(cap) => self.handle_point_captured(cap),
                 GameEvent::TeamPlayCaptureBlocked(block) => self.handle_capture_blocked(block),
+                GameEvent::TeamPlayCaptureBroken(e) => self.handle_capture_broken(e),
 
                 GameEvent::VoteStarted(e) => self.handle_vote_started(e),
                 GameEvent::VoteCast(e) => self.handle_vote_cast(e),
@@ -3030,6 +3645,10 @@ impl MessageHandler for MatchAnalyzer<'_> {
                 GameEvent::PayloadPushed(e) => self.handle_payload_pushed(e),
                 GameEvent::EnvironmentalDeath(e) => self.handle_environmental_death(e),
                 GameEvent::PlayerBuiltObject(e) => self.handle_player_built_object(e),
+                GameEvent::PlayerChargeDeployed(e) => self.handle_charge_deployed(e),
+                GameEvent::PlayerSappedObject(e) => self.handle_sapped_object(e),
+                GameEvent::TeamPlayFlagEvent(e) => self.handle_flag_event(e),
+                GameEvent::CtfFlagCaptured(e) => self.handle_flag_captured(e),
                 GameEvent::PlayerUpgradedObject(e) => self.handle_player_upgraded_object(e),
                 GameEvent::PlayerCarryObject(e) => self.handle_player_carry_object(e),
                 GameEvent::PlayerDropObject(e) => self.handle_player_drop_object(e),
@@ -3054,6 +3673,45 @@ impl MessageHandler for MatchAnalyzer<'_> {
                     }
                 }
 
+                GameEvent::TeamPlayRoundStart(e) => {
+                    self.events.push(MatchEvent::RoundStarted(RoundStarted {
+                        tick: self.tick,
+                        full_reset: e.full_reset,
+                    }));
+                }
+                GameEvent::TeamPlayRoundStalemate(e) => {
+                    self.events.push(MatchEvent::Stalemate(Stalemate {
+                        tick: self.tick,
+                        reason: e.reason,
+                    }));
+                }
+                GameEvent::TeamPlayGameOver(e) => {
+                    self.events.push(MatchEvent::GameOver(GameOver {
+                        tick: self.tick,
+                        reason: e.reason.to_string(),
+                    }));
+                }
+                GameEvent::TeamPlaySuddenDeathBegin(_) => {
+                    self.events
+                        .push(MatchEvent::SuddenDeathBegin(TickMarker { tick: self.tick }));
+                }
+                GameEvent::TeamPlaySuddenDeathEnd(_) => {
+                    self.events
+                        .push(MatchEvent::SuddenDeathEnd(TickMarker { tick: self.tick }));
+                }
+                GameEvent::TeamPlayOvertimeBegin(_) => {
+                    self.events
+                        .push(MatchEvent::OvertimeBegin(TickMarker { tick: self.tick }));
+                }
+                GameEvent::TeamPlayOvertimeEnd(_) => {
+                    self.events
+                        .push(MatchEvent::OvertimeEnd(TickMarker { tick: self.tick }));
+                }
+                GameEvent::TeamPlaySetupFinished(_) => {
+                    self.events
+                        .push(MatchEvent::SetupFinished(TickMarker { tick: self.tick }));
+                }
+
                 GameEvent::TeamPlayRoundWin(e) => {
                     let winner = Team::try_from(e.team).unwrap_or_else(|_| {
                         error!("Unknown team id won round: {}", e.team);
@@ -3062,6 +3720,15 @@ impl MessageHandler for MatchAnalyzer<'_> {
 
                     self.current_round.time = e.round_time;
                     self.current_round.is_sudden_death = e.was_sudden_death != 0;
+
+                    self.events.push(MatchEvent::RoundWon(RoundWon {
+                        tick: self.tick,
+                        winner: (winner == Team::Red || winner == Team::Blue).then_some(winner),
+                        is_stalemate: winner == Team::Other,
+                        win_reason: e.win_reason,
+                        round_time: e.round_time,
+                        was_sudden_death: e.was_sudden_death != 0,
+                    }));
 
                     if winner == Team::Red || winner == Team::Blue {
                         self.current_round.winner = Some(winner);
@@ -3128,71 +3795,11 @@ impl MessageHandler for MatchAnalyzer<'_> {
                 // based on server side plugins?)
                 GameEvent::PlayerDisconnect(d) => debug!("PlayerDisconnect {d:?}"),
                 GameEvent::PlayerInvulned(invuln) => debug!("PlayerDisconnect {invuln:?}"),
-                GameEvent::PlayerChargeDeployed(c) => debug!("PlayerChargeDeployed {c:?}"),
-                // GameEvent::TeamPlayRoundStalemate
 
                 // Uninteresting
-                GameEvent::HLTVStatus(_)
-                | GameEvent::TeamPlayBroadcastAudio(_)
-                | GameEvent::TeamPlayGameOver(_) => {}
+                GameEvent::HLTVStatus(_) | GameEvent::TeamPlayBroadcastAudio(_) => {}
 
-                GameEvent::ObjectDestroyed(e) => {
-                    if self.round_state != RoundState::Running {
-                        return;
-                    }
-
-                    let attacker_uid = UserId::from(e.attacker);
-
-                    let mut weapon: &'static str = ustr::ustr(e.weapon.as_ref()).as_str();
-                    if matches!(e.weapon, MaybeUtf8String::Invalid(_))
-                        || weapon == "building_carried_destroyed"
-                    {
-                        let steamid = self.user_id_to_steam_id.get(&attacker_uid).cloned();
-                        if let Some(steamid) = steamid {
-                            if let Some(player_summary) = self.player_summaries.get(&steamid) {
-                                if let Some(player_ent) = self.get_player(&player_summary.entity_id)
-                                {
-                                    if let Some(item) = self
-                                        .get_weapon(&player_ent.last_active_weapon_handle)
-                                        .and_then(|w| self.schema.items.get(&w.schema_id))
-                                    {
-                                        weapon = weapon::weapon_name(item, player_ent.class);
-                                    } else {
-                                        // Could not get weapon item, proceed with original weapon name if any
-                                    }
-                                } else {
-                                    error!(
-                                        "Could not find player entity {} for object destroyed event",
-                                        player_summary.entity_id
-                                    );
-                                }
-                            } else {
-                                error!(
-                                    "Could not find player summary for steamid of attacker_uid {attacker_uid} for object destroyed event"
-                                );
-                            }
-                        } else {
-                            error!(
-                                "Could not find steamid for attacker_uid {attacker_uid} for object destroyed event"
-                            );
-                        }
-                    }
-
-                    let steamid = self.user_id_to_steam_id.get(&attacker_uid).cloned();
-                    if let Some(steamid) = steamid {
-                        if let Some(attacker) = self.player_summaries.get_mut(&steamid) {
-                            attacker.handle_object_destroyed(weapon);
-                        } else {
-                            error!(
-                                "Could not find attacker summary for steamid {steamid} that destroyed building {e:?}"
-                            );
-                        }
-                    } else {
-                        error!(
-                            "Could not find steamid for attacker_uid {attacker_uid} that destroyed building {e:?}"
-                        );
-                    }
-                }
+                GameEvent::ObjectDestroyed(e) => self.handle_object_destroyed(e),
 
                 _ => {
                     trace!("Unhandled game event: {event:?}");
@@ -3374,13 +3981,16 @@ impl MessageHandler for MatchAnalyzer<'_> {
             .collect();
         votes.sort_by_key(|v| (u32::from(v.tick_start), v.voteidx));
 
+        // Handlers run in stream order, but sort defensively so the feed
+        // is always chronological.
+        self.events.sort_by_key(MatchEvent::tick);
+
         DemoSummary {
             rounds: self.rounds,
             chat: self.chat,
             votes,
             sourcemod_votes: self.sm_votes,
-            point_captures: self.point_captures,
-            kills: self.kills,
+            events: self.events,
         }
     }
 }
@@ -3982,6 +4592,27 @@ mod tests {
         assert_eq!(engie.stats.object_detonated, 1);
         // Entity-derived completion counter untouched by the event path.
         assert_eq!(engie.stats.object_built, 0);
+
+        // Each broadcast also lands in the event feed (placements are
+        // covered by entity-spawn BuildingBuilt events instead).
+        assert_eq!(analyzer.events.len(), 5);
+        assert!(matches!(
+            analyzer.events[0],
+            MatchEvent::BuildingUpgraded(_)
+        ));
+        assert!(matches!(analyzer.events[1], MatchEvent::BuildingCarried(_)));
+        assert!(matches!(analyzer.events[2], MatchEvent::BuildingDropped(_)));
+        assert!(matches!(analyzer.events[3], MatchEvent::BuildingRemoved(_)));
+        assert!(matches!(
+            analyzer.events[4],
+            MatchEvent::BuildingDetonated(_)
+        ));
+        let MatchEvent::BuildingUpgraded(up) = &analyzer.events[0] else {
+            unreachable!();
+        };
+        assert_eq!(up.player.as_deref(), Some("STEAM_0:1:400"));
+        assert_eq!(up.building, BuildingType::Sentry);
+        assert_eq!(up.index, 475);
     }
 
     #[test]
@@ -4061,8 +4692,10 @@ mod tests {
             cap_time: 34.45,
         });
 
-        assert_eq!(analyzer.point_captures.len(), 1);
-        let cap = &analyzer.point_captures[0];
+        assert_eq!(analyzer.events.len(), 1);
+        let MatchEvent::CaptureStarted(cap) = &analyzer.events[0] else {
+            panic!("expected capture_started event");
+        };
         assert_eq!(u32::from(cap.tick), 2384);
         assert_eq!(cap.cp_name, "#koth_viaduct_cap");
         assert_eq!(cap.cap_team, 2);
@@ -4074,7 +4707,7 @@ mod tests {
 
         let parser_state = ParserState::new(0, |_| true, false);
         let summary = analyzer.into_output(&parser_state);
-        assert_eq!(summary.point_captures.len(), 1);
+        assert_eq!(summary.events.len(), 1);
     }
 
     #[test]
@@ -4270,10 +4903,17 @@ mod tests {
             crit_type: 0,
         };
         analyzer.tick = DemoTick::from(5000);
-        analyzer.record_kill_event(&death, DemoTick::from(5000), "STEAM_0:1:901");
+        analyzer.record_kill_event(
+            &death,
+            DemoTick::from(5000),
+            "STEAM_0:1:901",
+            EnumSet::new(),
+        );
 
-        assert_eq!(analyzer.kills.len(), 1);
-        let kill = &analyzer.kills[0];
+        assert_eq!(analyzer.events.len(), 1);
+        let MatchEvent::Kill(kill) = &analyzer.events[0] else {
+            panic!("expected kill event");
+        };
         assert_eq!(u32::from(kill.tick), 5000);
         assert_eq!(kill.killer.as_deref(), Some("STEAM_0:1:900"));
         assert_eq!(kill.victim, "STEAM_0:1:901");
@@ -4290,10 +4930,487 @@ mod tests {
         // World kill: killer absent but victim recorded.
         let mut world_death = death.clone();
         world_death.attacker = 0;
-        analyzer.record_kill_event(&world_death, DemoTick::from(5100), "STEAM_0:1:901");
-        assert_eq!(analyzer.kills.len(), 2);
-        assert_eq!(analyzer.kills[1].killer, None);
-        assert_eq!(u32::from(analyzer.kills[1].tick), 5100);
+        analyzer.record_kill_event(
+            &world_death,
+            DemoTick::from(5100),
+            "STEAM_0:1:901",
+            EnumSet::new(),
+        );
+        assert_eq!(analyzer.events.len(), 2);
+        let MatchEvent::Kill(world_kill) = &analyzer.events[1] else {
+            panic!("expected kill event");
+        };
+        assert_eq!(world_kill.killer, None);
+        assert_eq!(u32::from(world_kill.tick), 5100);
+    }
+
+    #[test]
+    fn test_kill_event_flags() {
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+        analyzer.tick = DemoTick::from(5200);
+        analyzer.record_kill_event(
+            &PlayerDeathEvent {
+                user_id: 35,
+                victim_ent_index: 13,
+                inflictor_ent_index: 0,
+                attacker: 0,
+                weapon: "world".into(),
+                weapon_id: 0,
+                damage_bits: 0,
+                custom_kill: 0,
+                assister: 0,
+                weapon_log_class_name: "world".into(),
+                stun_flags: 0,
+                death_flags: 0,
+                silent_kill: false,
+                player_penetrate_count: 0,
+                assister_fallback: "".into(),
+                kill_streak_total: 0,
+                kill_streak_wep: 0,
+                kill_streak_assist: 0,
+                kill_streak_victim: 0,
+                ducks_streaked: 0,
+                duck_streak_total: 0,
+                duck_streak_assist: 0,
+                duck_streak_victim: 0,
+                rocket_jump: false,
+                weapon_def_index: 0,
+                crit_type: 0,
+            },
+            DemoTick::from(5200),
+            "STEAM_0:1:901",
+            EnumSet::from(Death::FirstBlood) | Death::Domination,
+        );
+        let MatchEvent::Kill(flagged) = &analyzer.events[0] else {
+            panic!("expected kill event");
+        };
+        assert!(flagged.is_first_blood);
+        assert!(flagged.is_domination);
+        assert!(!flagged.is_revenge);
+    }
+
+    fn killstreak_test_death(
+        user_id: u16,
+        attacker: u16,
+        assister: u16,
+        death_flags: u16,
+    ) -> PlayerDeathEvent {
+        PlayerDeathEvent {
+            user_id,
+            victim_ent_index: 0,
+            inflictor_ent_index: 0,
+            attacker,
+            weapon: "world".into(),
+            weapon_id: 0,
+            damage_bits: 0,
+            custom_kill: 0,
+            assister,
+            weapon_log_class_name: "world".into(),
+            stun_flags: 0,
+            death_flags,
+            silent_kill: false,
+            player_penetrate_count: 0,
+            assister_fallback: "".into(),
+            kill_streak_total: 0,
+            kill_streak_wep: 0,
+            kill_streak_assist: 0,
+            kill_streak_victim: 0,
+            ducks_streaked: 0,
+            duck_streak_total: 0,
+            duck_streak_assist: 0,
+            duck_streak_victim: 0,
+            rocket_jump: false,
+            weapon_def_index: 0,
+            crit_type: 0,
+        }
+    }
+
+    #[test]
+    fn test_killstreak_ended_events() {
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+        let parser_state = ParserState::new(0, |_| true, false);
+        // Killer uid 30, assister uid 40, victims uids 50-54. Seeds are
+        // stored +1 by the mock userinfo encoding, mirroring real demos.
+        for (idx, (name, steam, uid, eid)) in [
+            ("Killer", "STEAM_0:1:900", 30u16, 7u32),
+            ("Assister", "STEAM_0:1:901", 40, 29),
+            ("V1", "STEAM_0:1:902", 50, 20),
+            ("V2", "STEAM_0:1:903", 51, 21),
+            ("V3", "STEAM_0:1:904", 52, 22),
+            ("V4", "STEAM_0:1:905", 53, 23),
+            ("V5", "STEAM_0:1:906", 54, 24),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let entry = create_mock_user_info(name, steam, *uid, *eid);
+            analyzer.handle_string_entry("userinfo", idx, &entry, &parser_state);
+            analyzer.entities[*eid as usize + 1] = Some(Box::new(entity::Player::default()));
+        }
+
+        let streak_of = |analyzer: &MatchAnalyzer, steam: &str| {
+            analyzer.player_summaries.get(steam).unwrap().killstreak
+        };
+
+        // Four solo kills, then one with an assist: kills and assists
+        // both feed the streak.
+        for (i, victim) in [50u16, 51, 52, 53].iter().enumerate() {
+            let tick = DemoTick::from(1000 + u32::try_from(i).unwrap_or_default());
+            analyzer.tick = tick;
+            analyzer.handle_player_death(&killstreak_test_death(*victim, 30, 0xffff, 0), tick);
+        }
+        assert_eq!(streak_of(&analyzer, "STEAM_0:1:900"), 4);
+        analyzer.tick = DemoTick::from(1004);
+        analyzer.handle_player_death(&killstreak_test_death(54, 30, 40, 0), DemoTick::from(1004));
+        assert_eq!(streak_of(&analyzer, "STEAM_0:1:900"), 5);
+        assert_eq!(streak_of(&analyzer, "STEAM_0:1:901"), 1);
+
+        // A 1-streak death ends silently.
+        analyzer.tick = DemoTick::from(1005);
+        analyzer.handle_player_death(
+            &killstreak_test_death(40, 50, 0xffff, 0),
+            DemoTick::from(1005),
+        );
+        assert_eq!(streak_of(&analyzer, "STEAM_0:1:901"), 0);
+        assert!(
+            analyzer
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    MatchEvent::KillstreakEnded(k) => Some(k),
+                    _ => None,
+                })
+                .all(|k| k.player != "STEAM_0:1:901"),
+            "sub-threshold streaks end silently"
+        );
+
+        // The 5-streak ends with an event naming the killer, ordered
+        // right after the kill itself.
+        analyzer.tick = DemoTick::from(1006);
+        analyzer.handle_player_death(
+            &killstreak_test_death(30, 50, 0xffff, 0),
+            DemoTick::from(1006),
+        );
+        assert_eq!(streak_of(&analyzer, "STEAM_0:1:900"), 0);
+        let tail = &analyzer.events[analyzer.events.len() - 2..];
+        let (MatchEvent::Kill(kill), MatchEvent::KillstreakEnded(ended)) = (&tail[0], &tail[1])
+        else {
+            panic!("expected kill followed by killstreak_ended, got {tail:?}");
+        };
+        assert_eq!(u32::from(kill.tick), 1006);
+        assert_eq!(ended.player, "STEAM_0:1:900");
+        assert_eq!(ended.streak, 5);
+        assert_eq!(ended.killer.as_deref(), Some("STEAM_0:1:902"));
+
+        // Suicides end streaks too, naming the player themselves.
+        analyzer
+            .player_summaries
+            .get_mut("STEAM_0:1:902")
+            .unwrap()
+            .killstreak = 7;
+        analyzer.tick = DemoTick::from(1007);
+        analyzer.handle_player_death(
+            &killstreak_test_death(50, 50, 0xffff, 0),
+            DemoTick::from(1007),
+        );
+        let MatchEvent::KillstreakEnded(suicide) = analyzer.events.last().unwrap() else {
+            panic!("expected killstreak_ended");
+        };
+        assert_eq!(suicide.player, "STEAM_0:1:902");
+        assert_eq!(suicide.streak, 7);
+        assert_eq!(suicide.killer.as_deref(), Some("STEAM_0:1:902"));
+
+        // Feigned deaths neither emit nor reset the streak.
+        analyzer
+            .player_summaries
+            .get_mut("STEAM_0:1:903")
+            .unwrap()
+            .killstreak = 6;
+        let before = analyzer.events.len();
+        analyzer.tick = DemoTick::from(1008);
+        analyzer.handle_player_death(
+            &killstreak_test_death(51, 30, 0xffff, EnumSet::only(Death::Feign).as_repr()),
+            DemoTick::from(1008),
+        );
+        assert_eq!(analyzer.events.len(), before, "feigns emit nothing");
+        assert_eq!(streak_of(&analyzer, "STEAM_0:1:903"), 6);
+    }
+
+    #[test]
+    fn test_capture_events() {
+        use tf_demo_parser::demo::gameevent_gen::{
+            TeamPlayCaptureBlockedEvent, TeamPlayCaptureBrokenEvent, TeamPlayPointCapturedEvent,
+        };
+
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+        let parser_state = ParserState::new(0, |_| true, false);
+        for (idx, (name, steam, uid, eid)) in [
+            ("Red1", "STEAM_0:1:600", 20u16, 7u32),
+            ("Red2", "STEAM_0:1:601", 21, 15),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let entry = create_mock_user_info(name, steam, *uid, *eid);
+            analyzer.handle_string_entry("userinfo", idx, &entry, &parser_state);
+        }
+        analyzer.tick = DemoTick::from(6000);
+
+        analyzer.handle_point_captured(&TeamPlayPointCapturedEvent {
+            cp: 0,
+            cp_name: "#koth_viaduct_cap".into(),
+            team: 2,
+            cappers: "\u{8}\u{10}".into(),
+        });
+        analyzer.handle_capture_blocked(&TeamPlayCaptureBlockedEvent {
+            cp: 0,
+            cp_name: "#koth_viaduct_cap".into(),
+            blocker: 8,
+            victim: 16,
+        });
+        analyzer.handle_capture_broken(&TeamPlayCaptureBrokenEvent {
+            cp: 1,
+            cp_name: "#koth_viaduct_cap2".into(),
+            time_remaining: 12.5,
+        });
+
+        assert_eq!(analyzer.events.len(), 3);
+        let MatchEvent::Capture(cap) = &analyzer.events[0] else {
+            panic!("expected capture event");
+        };
+        assert_eq!(u32::from(cap.tick), 6000);
+        assert_eq!(cap.team, 2);
+        assert_eq!(cap.cap_team, 2);
+        assert_eq!(
+            cap.cappers,
+            vec!["STEAM_0:1:600".to_string(), "STEAM_0:1:601".to_string()]
+        );
+        let MatchEvent::CaptureBlocked(blocked) = &analyzer.events[1] else {
+            panic!("expected capture_blocked event");
+        };
+        assert_eq!(blocked.blocker.as_deref(), Some("STEAM_0:1:600"));
+        assert_eq!(blocked.victim.as_deref(), Some("STEAM_0:1:601"));
+        let MatchEvent::CaptureBroken(broken) = &analyzer.events[2] else {
+            panic!("expected capture_broken event");
+        };
+        assert!((broken.time_remaining - 12.5).abs() < 0.01);
+
+        // Stats side effects unchanged.
+        assert_eq!(
+            analyzer
+                .player_summaries
+                .get("STEAM_0:1:600")
+                .unwrap()
+                .stats
+                .captures,
+            1
+        );
+        assert_eq!(
+            analyzer
+                .player_summaries
+                .get("STEAM_0:1:600")
+                .unwrap()
+                .stats
+                .captures_blocked,
+            1
+        );
+    }
+
+    #[test]
+    fn test_uber_and_sapper_events() {
+        use tf_demo_parser::demo::gameevent_gen::{
+            PlayerChargeDeployedEvent, PlayerSappedObjectEvent,
+        };
+
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+        let parser_state = ParserState::new(0, |_| true, false);
+        for (idx, (name, steam, uid, eid)) in [
+            ("Medic", "STEAM_0:1:500", 42u16, 15u32),
+            ("Patient", "STEAM_0:1:501", 37, 14),
+            ("Spy", "STEAM_0:1:502", 50, 6),
+            ("Engie", "STEAM_0:1:503", 30, 7),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let entry = create_mock_user_info(name, steam, *uid, *eid);
+            analyzer.handle_string_entry("userinfo", idx, &entry, &parser_state);
+        }
+        analyzer.tick = DemoTick::from(7000);
+
+        // Uncharged deaths emit no event.
+        analyzer.handle_medic_death(&MedicDeathEvent {
+            user_id: 42,
+            attacker: 35,
+            healing: 200,
+            charged: false,
+        });
+        analyzer.handle_medic_death(&MedicDeathEvent {
+            user_id: 42,
+            attacker: 0,
+            healing: 147,
+            charged: true,
+        });
+        analyzer.handle_charge_deployed(&PlayerChargeDeployedEvent {
+            user_id: 42,
+            target_id: 37,
+        });
+        analyzer.handle_sapped_object(&PlayerSappedObjectEvent {
+            user_id: 50,
+            owner_id: 30,
+            object: 2,
+            sapper_id: 99,
+        });
+
+        assert_eq!(analyzer.events.len(), 3);
+        let MatchEvent::UberDropped(drop) = &analyzer.events[0] else {
+            panic!("expected uber_dropped event");
+        };
+        assert_eq!(drop.medic.as_deref(), Some("STEAM_0:1:500"));
+        assert_eq!(drop.attacker, None);
+        assert_eq!(drop.healing, 147);
+        let MatchEvent::UberDeployed(pop) = &analyzer.events[1] else {
+            panic!("expected uber_deployed event");
+        };
+        assert_eq!(pop.medic.as_deref(), Some("STEAM_0:1:500"));
+        assert_eq!(pop.target.as_deref(), Some("STEAM_0:1:501"));
+        let MatchEvent::SapperPlaced(sap) = &analyzer.events[2] else {
+            panic!("expected sapper_placed event");
+        };
+        assert_eq!(sap.spy.as_deref(), Some("STEAM_0:1:502"));
+        assert_eq!(sap.owner.as_deref(), Some("STEAM_0:1:503"));
+        assert_eq!(sap.building, BuildingType::Sentry);
+        assert_eq!(sap.sapper_index, 99);
+    }
+
+    #[test]
+    fn test_building_destroyed_event() {
+        use crate::Vec3;
+        use tf_demo_parser::demo::gameevent_gen::ObjectDestroyedEvent;
+
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+        let parser_state = ParserState::new(0, |_| true, false);
+        for (idx, (name, steam, uid, eid)) in [
+            ("Engie", "STEAM_0:1:400", 30u16, 8u32),
+            ("Soldier", "STEAM_0:1:401", 31, 9),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let entry = create_mock_user_info(name, steam, *uid, *eid);
+            analyzer.handle_string_entry("userinfo", idx, &entry, &parser_state);
+        }
+        analyzer.round_state = RoundState::Running;
+        analyzer.tick = DemoTick::from(8000);
+        analyzer.entities[475] = Some(Box::new(entity::Sentry {
+            origin: Vec3::new(1.0, 2.0, 3.0),
+            ..Default::default()
+        }));
+
+        analyzer.handle_object_destroyed(&ObjectDestroyedEvent {
+            user_id: 30,
+            attacker: 31,
+            assister: 0xffff,
+            weapon: "tf_projectile_rocket".into(),
+            weapon_id: 0,
+            object_type: 2,
+            index: 475,
+            was_building: true,
+        });
+        // World destruction: no attacker.
+        analyzer.handle_object_destroyed(&ObjectDestroyedEvent {
+            user_id: 30,
+            attacker: 0,
+            assister: 0,
+            weapon: "world".into(),
+            weapon_id: 0xffff,
+            object_type: 0,
+            index: 999,
+            was_building: true,
+        });
+
+        assert_eq!(analyzer.events.len(), 2);
+        let MatchEvent::BuildingDestroyed(d) = &analyzer.events[0] else {
+            panic!("expected building_destroyed event");
+        };
+        assert_eq!(u32::from(d.tick), 8000);
+        assert_eq!(d.owner.as_deref(), Some("STEAM_0:1:400"));
+        assert_eq!(d.attacker.as_deref(), Some("STEAM_0:1:401"));
+        assert_eq!(d.assister, None);
+        assert_eq!(d.weapon, "tf_projectile_rocket");
+        assert_eq!(d.building, BuildingType::Sentry);
+        let pos = d.pos.unwrap();
+        assert_eq!((pos.x, pos.y, pos.z), (1.0, 2.0, 3.0));
+
+        let MatchEvent::BuildingDestroyed(w) = &analyzer.events[1] else {
+            panic!("expected building_destroyed event");
+        };
+        assert_eq!(w.attacker, None);
+        assert_eq!(w.building, BuildingType::Dispenser);
+        assert!(w.pos.is_none());
+    }
+
+    #[test]
+    fn test_match_event_json_shape() {
+        // Tagged JSON: {"type": "<snake_case>", ...fields}.
+        let kill = MatchEvent::Kill(KillEvent {
+            tick: DemoTick::from(100),
+            killer: Some("STEAM_0:1:1".to_string()),
+            victim: "STEAM_0:1:2".to_string(),
+            weapon: "scattergun".to_string(),
+            is_first_blood: true,
+            ..Default::default()
+        });
+        let json = serde_json::to_string(&kill).unwrap();
+        assert!(json.contains("\"type\":\"kill\""));
+        assert!(json.contains("\"is_first_blood\":true"));
+        assert!(!json.contains("is_domination"), "false flags are skipped");
+        let back: MatchEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, MatchEvent::Kill(_)));
+
+        let built = MatchEvent::BuildingBuilt(BuildingBuilt {
+            tick: DemoTick::from(200),
+            owner: Some("STEAM_0:1:3".to_string()),
+            building: BuildingType::Sentry,
+            level: 3,
+            is_mini: false,
+            pos: Position {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+            },
+        });
+        let json = serde_json::to_string(&built).unwrap();
+        assert!(json.contains("\"type\":\"building_built\""));
+        assert!(json.contains("\"building\":\"sentry\""));
+        let back: MatchEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, MatchEvent::BuildingBuilt(_)));
+
+        let ended = MatchEvent::KillstreakEnded(KillstreakEnded {
+            tick: DemoTick::from(300),
+            player: "STEAM_0:1:4".to_string(),
+            streak: 7,
+            killer: Some("STEAM_0:1:5".to_string()),
+        });
+        let json = serde_json::to_string(&ended).unwrap();
+        assert!(json.contains("\"type\":\"killstreak_ended\""));
+        assert!(json.contains("\"streak\":7"));
+        let back: MatchEvent = serde_json::from_str(&json).unwrap();
+        let MatchEvent::KillstreakEnded(back) = back else {
+            panic!("expected killstreak_ended");
+        };
+        assert_eq!(back.streak, 7);
+
+        assert_eq!(BuildingType::from_object_type(0), BuildingType::Dispenser);
+        assert_eq!(BuildingType::from_object_type(1), BuildingType::Teleporter);
+        assert_eq!(BuildingType::from_object_type(2), BuildingType::Sentry);
+        assert_eq!(BuildingType::from_object_type(3), BuildingType::Sapper);
+        assert_eq!(BuildingType::from_object_type(9), BuildingType::Unknown);
     }
 
     #[test]
