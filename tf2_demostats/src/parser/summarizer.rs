@@ -357,8 +357,9 @@ pub struct FlagCaptured {
 pub const KILLSTREAK_THRESHOLD: u32 = 5;
 
 /// A player died with a killstreak of [`KILLSTREAK_THRESHOLD`] or more.
-/// Suicides record the player as their own killer; world deaths have no
-/// killer. Feigned deaths (spy) neither end streaks nor emit this.
+/// Suicides record the player as their own killer; world deaths, and
+/// streaks still alive when the round (or demo) ends, have no killer.
+/// Feigned deaths (spy) neither end streaks nor emit this.
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct KillstreakEnded {
     pub tick: DemoTick,
@@ -1726,6 +1727,21 @@ impl<'a> MatchAnalyzer<'a> {
                     streak,
                     killer,
                 }));
+        }
+    }
+
+    /// Terminate all live streaks, reporting notable ones with no killer.
+    /// Called when a round ends (and at demo end): a streak nobody ended
+    /// by death still counts and must not leak into the next round.
+    pub fn flush_killstreaks(&mut self) {
+        let ended: Vec<(String, u32)> = self
+            .player_summaries
+            .values_mut()
+            .map(|p| (p.steamid.clone(), std::mem::take(&mut p.killstreak)))
+            .collect();
+        let tick = self.tick;
+        for (steamid, streak) in ended {
+            self.push_killstreak_ended(tick, &steamid, streak, None);
         }
     }
     /// Steamid for a player entity index, if known.
@@ -3784,6 +3800,10 @@ impl MessageHandler for MatchAnalyzer<'_> {
 
                     self.rounds.push(std::mem::take(&mut self.current_round));
 
+                    // Round end terminates live streaks: report them before
+                    // the per-round reset below clears the counters.
+                    self.flush_killstreaks();
+
                     // Reset stats for all players for the new round
                     for player_summary in self.player_summaries.values_mut() {
                         player_summary.reset_stats();
@@ -3904,6 +3924,10 @@ impl MessageHandler for MatchAnalyzer<'_> {
     }
 
     fn into_output(mut self, _parser_state: &ParserState) -> <Self as MessageHandler>::Output {
+        // Demo end terminates whatever streaks are still alive (a demo
+        // cut mid-round has no round-win to do it).
+        self.flush_killstreaks();
+
         // If the demo ends mid-round, capture the state of the current_round
         // We can check if current_round has any meaningful data, e.g., time > 0 or specific events occurred.
         // A simple check could be if any players have stats, or if round_state indicates it started.
@@ -5136,6 +5160,66 @@ mod tests {
         );
         assert_eq!(analyzer.events.len(), before, "feigns emit nothing");
         assert_eq!(streak_of(&analyzer, "STEAM_0:1:903"), 6);
+    }
+
+    #[test]
+    fn test_killstreak_flush_at_round_end() {
+        let schema = Schema::default();
+        let mut analyzer = MatchAnalyzer::new(&schema);
+        let parser_state = ParserState::new(0, |_| true, false);
+        for (idx, (name, steam, uid, eid)) in [
+            ("Hot", "STEAM_0:1:910", 60u16, 40u32),
+            ("Cold", "STEAM_0:1:911", 61, 41),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let entry = create_mock_user_info(name, steam, *uid, *eid);
+            analyzer.handle_string_entry("userinfo", idx, &entry, &parser_state);
+        }
+        analyzer
+            .player_summaries
+            .get_mut("STEAM_0:1:910")
+            .unwrap()
+            .killstreak = 8;
+        analyzer
+            .player_summaries
+            .get_mut("STEAM_0:1:911")
+            .unwrap()
+            .killstreak = 4;
+
+        analyzer.tick = DemoTick::from(2000);
+        analyzer.flush_killstreaks();
+
+        // Only the notable streak is reported, with no killer: the round
+        // ended, nobody died. Both counters reset.
+        assert_eq!(analyzer.events.len(), 1);
+        let MatchEvent::KillstreakEnded(ended) = &analyzer.events[0] else {
+            panic!("expected killstreak_ended");
+        };
+        assert_eq!(u32::from(ended.tick), 2000);
+        assert_eq!(ended.player, "STEAM_0:1:910");
+        assert_eq!(ended.streak, 8);
+        assert_eq!(ended.killer, None);
+        assert_eq!(
+            analyzer
+                .player_summaries
+                .get("STEAM_0:1:910")
+                .unwrap()
+                .killstreak,
+            0
+        );
+        assert_eq!(
+            analyzer
+                .player_summaries
+                .get("STEAM_0:1:911")
+                .unwrap()
+                .killstreak,
+            0
+        );
+
+        analyzer.flush_killstreaks();
+        assert_eq!(analyzer.events.len(), 1, "flush is idempotent");
     }
 
     #[test]

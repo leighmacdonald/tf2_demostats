@@ -304,11 +304,13 @@ and round/game lifecycle markers (`round_started`, `round_won`,
 `stalemate`, `game_over`, sudden-death/overtime/setup markers). Player
 fields are steamids; anything unresolvable is omitted.
 
-Kills and assists both feed a per-player killstreak counter (survives
-round resets, like the in-game counter). Dying with a streak of 5 or more
-emits `killstreak_ended` naming the killer — suicides name the player
-themselves, world deaths omit `killer`, and feigned spy deaths neither
-end streaks nor emit.
+Kills and assists both feed a per-player killstreak counter. Dying with
+a streak of 5 or more emits `killstreak_ended` naming the killer —
+suicides name the player themselves, world deaths omit `killer`, and
+feigned spy deaths neither end streaks nor emit. Round end terminates
+live streaks too: streaks of 5+ still alive at `round_won` (or demo end)
+emit `killstreak_ended` with no killer, so notable streaks are never
+lost silently and never leak into the next round.
 
 ### Extract voice audio
 

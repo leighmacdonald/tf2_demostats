@@ -116,7 +116,8 @@ pub struct PlayerSummary {
     pub scoreboard_healing: u32,
 
     /// Consecutive kills + assists since the player's last (non-feigned)
-    /// death. Survives round resets; feeds `KillstreakEnded` events.
+    /// death. Terminated (and reported) when rounds end; see
+    /// `MatchAnalyzer::flush_killstreaks`.
     #[serde(skip)]
     pub killstreak: u32,
 
