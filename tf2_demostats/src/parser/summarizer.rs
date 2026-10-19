@@ -640,6 +640,7 @@ pub struct MatchAnalyzer<'a> {
 
     weapon_class_ids: HashSet<ClassId>,
     projectile_class_ids: HashSet<ClassId>,
+    entity_class_names: HashMap<u32, String>,
 
     vote_sessions: HashMap<u32, VoteSummary>, // voteidx -> in-progress native vote
     finished_votes: Vec<VoteSummary>,         // closed native votes (voteidx reuse across maps)
@@ -989,6 +990,7 @@ impl<'a> MatchAnalyzer<'a> {
             removed_colliders: Vec::with_capacity(ENTITY_COUNT),
             projectile_class_ids: HashSet::new(),
             weapon_class_ids: HashSet::new(),
+            entity_class_names: HashMap::new(),
             vote_sessions: HashMap::new(),
             finished_votes: Vec::new(),
             events: Vec::new(),
@@ -1336,6 +1338,8 @@ impl<'a> MatchAnalyzer<'a> {
                     _ if is_weapon => Box::new(entity::Weapon::new(packet, parser_state, &mut ma)),
                     _ => Box::new(entity::Unknown::new(packet, parser_state, &mut ma)),
                 };
+                self.entity_class_names
+                    .insert(u32::from(packet.entity_index), class_name.to_string());
                 self.entities[eid] = Some(e);
             }
             UpdateType::Delta => {
@@ -3511,7 +3515,37 @@ impl MessageHandler for MatchAnalyzer<'_> {
                             // This is expected to rarely happen when a sentry is destroyed on the
                             // same tick that it shoot; otherwise it is an issue.
                             if !self.deleted_entities.contains(&EntityId::from(entity)) {
-                                error!("Unknown entity from effect dispatch: {entity}");
+                                // Effect names the parser does not consume: skip without an error. 
+                                // What each represents:
+                                // - "Tracer": bullet tracer (`m_fFlags=2`, dummy start
+                                //   `(999,999,999)`). Anchored to the firing entity or its
+                                //   attachments; unknowns are mostly deleted projectiles,
+                                //   wearables, scene entities, or PVS-culled edicts.
+                                // - "ParticleEffect": generic particle effect (`m_fFlags=1`).
+                                //   References players, projectiles, and map entities;
+                                //   unknowns are usually PVS-culled or already-deleted edicts.
+                                // - "ClientProjectile_Syringe": syringe-gun client projectile
+                                //   effect. Almost always anchored to a `CTFPlayer` slot that
+                                //   is empty at effect time (PVS gap).
+                                // - "TFBoltImpact": huntsman/crusader bolt impact. Rare; seen
+                                //   against scene entities, ragdolls, and projectiles.
+                                if matches!(
+                                    name,
+                                    Some(
+                                        "Tracer"
+                                            | "ParticleEffect"
+                                            | "ClientProjectile_Syringe"
+                                            | "TFBoltImpact",
+                                    )
+                                ) {
+                                    trace!(
+                                        "Ignoring {name:?} effect dispatch to unknown entity {entity} at tick {}",
+                                        self.tick
+                                    );
+                                } else {
+                                    let known_class = self.entity_class_names.get(&entity);
+                                    error!("Unknown entity from effect dispatch: entity={entity} effect_name={name:?} effect_id={name_id:?} tick={} origin=({},{},{}) start=({},{},{}) dmg_type={raw_dmg_type} known_class={known_class:?} props={e:?}", self.tick, origin.x, origin.y, origin.z, start.x, start.y, start.z);
+                                }
                             }
                             return;
                         };
