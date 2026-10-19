@@ -24,3 +24,5 @@ target/
 *.dem
 *.json
 !schema.json
+*.md 
+
